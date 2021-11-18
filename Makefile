@@ -1420,6 +1420,10 @@ $(FILTERS_DIR)/alias_with_offset_42.a: $(BIN_DIR)/alias.generator
 	@mkdir -p $(@D)
 	$(CURDIR)/$< -g alias_with_offset_42 -f alias_with_offset_42 $(GEN_AOT_OUTPUTS) -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime
 
+$(FILTERS_DIR)/g2_t.a: $(BIN_DIR)/g2.generator
+	@mkdir -p $(@D)
+	$(CURDIR)/$< -g g2_t -f g2_t $(GEN_AOT_OUTPUTS) -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime
+
 $(FILTERS_DIR)/g2_tuple.a: $(BIN_DIR)/g2.generator
 	@mkdir -p $(@D)
 	$(CURDIR)/$< -g g2_tuple -f g2_tuple $(GEN_AOT_OUTPUTS) -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime
@@ -1433,7 +1437,7 @@ $(FILTERS_DIR)/g2_lambda.a: $(BIN_DIR)/g2.generator
 	$(CURDIR)/$< -g g2_lambda -f g2_lambda $(GEN_AOT_OUTPUTS) -o $(CURDIR)/$(FILTERS_DIR) target=$(TARGET)-no_runtime scaling=33 ignored_type=float64 ignored_bool=true ignored_string=frob ignored_int8=-99
 
 # g2 has additional deps to link in
-$(BIN_DIR)/$(TARGET)/generator_aot_g2: $(FILTERS_DIR)/g2_lambda.a $(FILTERS_DIR)/g2_tuple.a $(FILTERS_DIR)/g2_pipeline.a
+$(BIN_DIR)/$(TARGET)/generator_aot_g2: $(FILTERS_DIR)/g2_lambda.a $(FILTERS_DIR)/g2_tuple.a $(FILTERS_DIR)/g2_pipeline.a $(FILTERS_DIR)/g2_t.a
 
 $(BIN_DIR)/$(TARGET)/generator_aotcpp_g2: $(FILTERS_DIR)/g2_lambda.halide_generated.cpp $(FILTERS_DIR)/g2_tuple.halide_generated.cpp $(FILTERS_DIR)/g2_pipeline.halide_generated.cpp
 

@@ -1,6 +1,23 @@
 #ifndef HALIDE_G2_H_
 #define HALIDE_G2_H_
 
+/*
+    TODO:
+
+    - How to specify inputs-as-buffers?
+        - (Mainly, how to specify buffer-level constraints on an input Func, e.g stride, etc, for e.g. specialize())
+        - can't specify Halide::Buffer as input because we need a Parameter
+        - can't use func.output_buffer() [sic] because the Parameter won't get found by code
+          and is wonky and bad
+        - could extend inputs to allow ImageParam, but would reduce generality some (would likely mean
+          writing manual wrappers for general code, which is probably OK)
+            - Could we have a way to express constraints of that sort as part of the registration?
+    - How to specify outputs-as-buffers?
+        - func.output_buffer() works, but is ugly and yucky
+        - could we surface OutputImageParam as a useful type here? Maybe but would be a weird paradigm shift
+*/
+
+
 #include "AbstractGenerator.h"
 
 #include <array>
@@ -10,6 +27,7 @@
 // ----------------------------------------------
 
 struct halide_fake_string_type_t {};
+struct halide_fake_target_type_t {};
 struct halide_fake_type_type_t {};
 
 template<>
@@ -17,6 +35,14 @@ struct halide_c_type_to_name<halide_fake_string_type_t> {
     static constexpr bool known_type = true;
     static halide_cplusplus_type_name name() {
         return {halide_cplusplus_type_name::Simple, "std::string"};
+    }
+};
+
+template<>
+struct halide_c_type_to_name<halide_fake_target_type_t> {
+    static constexpr bool known_type = true;
+    static halide_cplusplus_type_name name() {
+        return {halide_cplusplus_type_name::Simple, "Halide::Target"};
     }
 };
 
@@ -77,7 +103,7 @@ struct SingleArg {
         Expression,
         Tuple,
         Function,
-        Pipeline,
+        Pipeline
     };
 
     std::string name;
@@ -259,6 +285,12 @@ inline SingleArg SingleArgInferrer<Halide::Tuple>::operator()() {
     return SingleArg{"", SingleArg::Kind::Tuple, {}, 0};
 }
 
+template<>
+inline SingleArg SingleArgInferrer<Halide::Target>::operator()() {
+    const Type t = type_of<halide_fake_target_type_t *>();
+    return SingleArg{"target", SingleArg::Kind::Constant, {t}, 0};
+}
+
 // ---------------------------------------
 
 struct FnInvoker {
@@ -281,9 +313,9 @@ struct FnInvoker {
 struct CapturedArg {
     std::string name;
     std::vector<Parameter> params;  // Can have > 1 for Tuple-valued inputs
-    Func f;
-    Expr e;
-    Tuple t{Expr()};  // Tuple has no default ctor
+    Func func;
+    Expr expr;
+    Tuple tuple{Expr()};  // Tuple has no default ctor
     std::string str;
 
     using StrMap = std::map<std::string, std::string>;
@@ -291,6 +323,7 @@ struct CapturedArg {
     template<typename T>
     T value(const StrMap &m) const;
 
+private:
     std::string get_string(const StrMap &m) const {
         auto it = m.find(name);
         if (it != m.end()) {
@@ -303,17 +336,17 @@ struct CapturedArg {
 
 template<>
 inline Expr CapturedArg::value<Expr>(const StrMap &m) const {
-    return e;
+    return expr;
 }
 
 template<>
 inline Tuple CapturedArg::value<Tuple>(const StrMap &m) const {
-    return t;
+    return tuple;
 }
 
 template<>
 inline Func CapturedArg::value<Func>(const StrMap &m) const {
-    return f;
+    return func;
 }
 
 template<>
@@ -343,6 +376,12 @@ inline bool CapturedArg::value<bool>(const StrMap &m) const {
         user_assert(false) << "Unable to parse bool: " << s;
     }
     return b;
+}
+
+template<>
+inline Target CapturedArg::value<Target>(const StrMap &m) const {
+    const std::string s = get_string(m);
+    return Halide::Target(s);
 }
 
 template<typename T>
@@ -446,6 +485,12 @@ private:
     }
 
 public:
+    struct Target : public SingleArg {
+        Target()
+            : SingleArg("target", SingleArg::Kind::Constant, {type_of<halide_fake_target_type_t *>()}, 0, "host") {
+        }
+    };
+
     struct Constant : public SingleArg {
         template<typename T>
         Constant(const std::string &n, const T &value)
@@ -491,14 +536,16 @@ public:
 
     // Construct an FnBinder from an ordinary function
     template<typename ReturnType, typename... Args>
-    FnBinder(ReturnType (*fn)(Args...), const std::vector<SingleArg> &inputs_and_outputs) {
+    FnBinder(ReturnType (*fn)(Args...), const char *registry_name, const std::vector<SingleArg> &inputs_and_outputs)
+        : registry_name_(registry_name) {
         initialize(fn, fn, inputs_and_outputs);
     }
 
     // Construct an FnBinder from a lambda or std::function (possibly with internal state)
     template<typename Fn,  // typename... Inputs,
              typename std::enable_if<is_lambda<Fn>::value>::type * = nullptr>
-    FnBinder(Fn &&fn, const std::vector<SingleArg> &inputs_and_outputs) {
+    FnBinder(Fn &&fn, const char *registry_name, const std::vector<SingleArg> &inputs_and_outputs)
+        : registry_name_(registry_name) {
         initialize(std::forward<Fn>(fn), (typename function_signature<Fn>::type *)nullptr, inputs_and_outputs);
     }
 
@@ -517,12 +564,13 @@ public:
     }
 
 protected:
+    const char *registry_name_;
     std::vector<Constant> constants_;
     std::vector<AbstractGenerator::ArgInfo> inputs_;
     std::vector<AbstractGenerator::ArgInfo> outputs_;
     std::shared_ptr<FnInvoker> invoker_;
 
-    IOKind to_iokind(SingleArg::Kind k) {
+    static IOKind to_iokind(SingleArg::Kind k) {
         switch (k) {
         default:
             internal_error << "Unhandled SingleArg::Kind: " << k;
@@ -535,7 +583,7 @@ protected:
         }
     }
 
-    AbstractGenerator::ArgInfo to_arginfo(const SingleArg &a) {
+    static AbstractGenerator::ArgInfo to_arginfo(const SingleArg &a) {
         return AbstractGenerator::ArgInfo{
             a.name,
             to_iokind(a.kind),
@@ -544,7 +592,7 @@ protected:
         };
     }
 
-    Func make_param_func(const Parameter &p, const std::string &name) {
+    static Func make_param_func(const Parameter &p, const std::string &name) {
         internal_assert(p.is_buffer());
         Func f(name + "_im");
         auto b = p.buffer();
@@ -567,8 +615,18 @@ protected:
     template<typename Fn, typename ReturnType, typename... Args>
     void initialize(Fn &&fn, ReturnType (*)(Args...), const std::vector<SingleArg> &inputs_and_outputs) {
         const std::array<SingleArg, sizeof...(Args)> inferred_input_arg_types = {SingleArgInferrer<typename std::decay<Args>::type>()()...};
-        // There must be at least one output
-        internal_assert(inferred_input_arg_types.size() < inputs_and_outputs.size());
+        // TODO: it's not clear if this is useful or not; I think it's redundant and the error can be misleading
+        // user_assert(inferred_input_arg_types.size() < inputs_and_outputs.size())
+        //     << "There must be at least one Output() specification for HALIDE_REGISTER_G2(" << registry_name_ << ").";
+
+        {
+            std::set<std::string> names;
+            for (const auto &it : inputs_and_outputs) {
+                user_assert(names.count(it.name) == 0) << "The name '" << it.name << "' is used more than once"
+                                                       << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
+                names.insert(it.name);
+            }
+        }
 
         using CapFn = CapturedFn<ReturnType, Args...>;
         auto captured = std::make_unique<CapFn>();
@@ -577,14 +635,19 @@ protected:
         internal_assert(inputs_and_outputs.size() > 0);
         size_t first_output = inputs_and_outputs.size() - 1;
         user_assert(inputs_and_outputs[first_output].is_output)
-            << "Expected an Output as the final argument, but saw " << inputs_and_outputs[first_output].kind << " '" << inputs_and_outputs[first_output].name << "'.";
+            << "Expected an Output as the final argument, but saw " << inputs_and_outputs[first_output].kind
+            << " '" << inputs_and_outputs[first_output].name << "'"
+            << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
         while (first_output > 0 && inputs_and_outputs[first_output - 1].is_output) {
             first_output--;
         }
 
-        user_assert(sizeof...(Args) == first_output) << "The number of Input and Constant annotations does not match the number of function arguments";
+        user_assert(sizeof...(Args) == first_output) << "The number of Input and Constant annotations does not match the number of function arguments"
+                                                     << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
         for (size_t i = 0; i < first_output; ++i) {
-            user_assert(!inputs_and_outputs[i].is_output) << "Outputs must be listed after all Inputs and Constants, but saw '" << inputs_and_outputs[i].name << "'' out of place.";
+            user_assert(!inputs_and_outputs[i].is_output) << "Outputs must be listed after all Inputs and Constants, but saw '"
+                                                          << inputs_and_outputs[i].name << "' out of place"
+                                                          << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
             const bool is_constant = (inferred_input_arg_types[i].kind == SingleArg::Kind::Constant);
             const bool skip_default_value = !is_constant;
             const SingleArg matched = SingleArg::match(inputs_and_outputs[i], inferred_input_arg_types[i], skip_default_value);
@@ -593,7 +656,9 @@ protected:
             carg.name = matched.name;
             const auto k = inferred_input_arg_types[i].kind;
             user_assert(k != SingleArg::Kind::Pipeline)
-                << "Pipeline is only allowed for Outputs, not Inputs";
+                << "Pipeline is only allowed for Outputs, not Inputs"
+                << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
+            ;
             if (k == SingleArg::Kind::Constant) {
                 constants_.emplace_back(matched.name, matched.default_value);
                 constants_.back().types = matched.types;
@@ -623,21 +688,21 @@ protected:
                     for (const auto &f : funcs) {
                         wrap.push_back(f(Halide::_));
                     }
-                    carg.f = Func(carg.name);
-                    carg.f(Halide::_) = Tuple(wrap);
+                    carg.func = Func(carg.name);
+                    carg.func(Halide::_) = Tuple(wrap);
                 } else if (funcs.size() == 1) {
-                    carg.f = funcs[0];
+                    carg.func = funcs[0];
                 }
 
                 if (exprs.size() > 1) {
                     internal_assert(k == SingleArg::Kind::Tuple);
-                    carg.t = Tuple(exprs);
+                    carg.tuple = Tuple(exprs);
                 } else if (exprs.size() == 1) {
                     if (k == SingleArg::Kind::Tuple) {
                         // Tuple of size 1
-                        carg.t = Tuple(exprs);
+                        carg.tuple = Tuple(exprs);
                     } else {
-                        carg.e = exprs[0];
+                        carg.expr = exprs[0];
                     }
                 }
             }
@@ -648,14 +713,15 @@ protected:
         SingleArg inferred_ret_type = SingleArgInferrer<typename std::decay<ReturnType>::type>()();
         inferred_ret_type.is_output = true;
         user_assert(inferred_ret_type.kind == SingleArg::Kind::Function || inferred_ret_type.kind == SingleArg::Kind::Pipeline)
-            << "Outputs must be Func or Pipeline, but the type seen was " << inferred_ret_type.types << ".";
+            << "Outputs must be Func or Pipeline, but the type seen was " << inferred_ret_type.types
+            << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
         for (size_t i = first_output; i < inputs_and_outputs.size(); ++i) {
-            user_assert(inputs_and_outputs[i].is_output) << "All Inputs and Constants must come before any Outputs.";
+            user_assert(inputs_and_outputs[i].is_output) << "All Inputs and Constants must come before any Outputs"
+                                                         << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
             outputs_.push_back(to_arginfo(SingleArg::match(inputs_and_outputs[i], inferred_ret_type)));
         }
     }
 };
-
 
 class G2Generator : public AbstractGenerator {
     const TargetInfo target_info_;
@@ -709,60 +775,60 @@ public:
     }
 
     void set_generatorparam_value(const std::string &name, const std::string &value) override {
-        user_assert(!pipeline_.defined())
+        internal_assert(!pipeline_.defined())
             << "set_generatorparam_value() must be called before build_pipeline().";
-        user_assert(generatorparams_.count(name) == 1) << "Unknown Constant: " << name;
+        internal_assert(generatorparams_.count(name) == 1) << "Unknown Constant: " << name;
         generatorparams_[name] = value;
     }
 
     void set_generatorparam_value(const std::string &name, const LoopLevel &value) override {
-        user_assert(!pipeline_.defined())
+        internal_assert(!pipeline_.defined())
             << "set_generatorparam_value() must be called before build_pipeline().";
-        user_assert(generatorparams_.count(name) == 1) << "Unknown Constant: " << name;
-        user_assert(false) << "This Generator has no LoopLevel constants.";
+        internal_assert(generatorparams_.count(name) == 1) << "Unknown Constant: " << name;
+        internal_assert(false) << "This Generator has no LoopLevel constants.";
     }
 
     void bind_input(const std::string &name, const std::vector<Parameter> &v) override {
-        user_assert(!pipeline_.defined())
+        internal_assert(!pipeline_.defined())
             << "bind_input() must be called before build_pipeline().";
         internal_error << "Unimplemented: " << __func__;
     }
 
     void bind_input(const std::string &name, const std::vector<Func> &v) override {
-        user_assert(!pipeline_.defined())
+        internal_assert(!pipeline_.defined())
             << "bind_input() must be called before build_pipeline().";
         internal_error << "Unimplemented: " << __func__;
     }
 
     void bind_input(const std::string &name, const std::vector<Expr> &v) override {
-        user_assert(!pipeline_.defined())
+        internal_assert(!pipeline_.defined())
             << "bind_input() must be called before build_pipeline().";
         internal_error << "Unimplemented: " << __func__;
     }
 
     Pipeline build_pipeline() override {
-        user_assert(!pipeline_.defined())
+        internal_assert(!pipeline_.defined())
             << "build_pipeline() may not be called twice.";
 
         pipeline_ = invoker_->invoke(generatorparams_);
 
-        user_assert(outputs_.size() == pipeline_.outputs().size())
+        internal_assert(outputs_.size() == pipeline_.outputs().size())
             << "Expected exactly " << outputs_.size() << " output(s) but the function returned a Pipeline containing "
             << pipeline_.outputs().size() << ".";
 
-        user_assert(pipeline_.defined())
+        internal_assert(pipeline_.defined())
             << "build_pipeline() did not build a Pipeline!";
         return pipeline_;
     }
 
     std::vector<Parameter> get_parameters_for_input(const std::string &name) override {
-        user_assert(pipeline_.defined())
+        internal_assert(pipeline_.defined())
             << "get_parameters_for_input() must be called after build_pipeline().";
         return invoker_->get_parameters_for_input(name);
     }
 
     std::vector<Func> get_funcs_for_output(const std::string &name) override {
-        user_assert(pipeline_.defined())
+        internal_assert(pipeline_.defined())
             << "get_funcs_for_output() must be called after build_pipeline().";
         auto outputs = pipeline_.outputs();
 
@@ -777,7 +843,7 @@ public:
     }
 
     ExternsMap get_external_code_map() override {
-        user_assert(pipeline_.defined())
+        internal_assert(pipeline_.defined())
             << "get_external_code_map() must be called after build_pipeline().";
         // TODO: not supported now; how necessary and/or doable is this?
         return {};
@@ -789,44 +855,32 @@ public:
     }
 };
 
-class G2GeneratorFactory {
-    const std::string name_;
-    const FnBinder binder_;
-
-public:
-    explicit G2GeneratorFactory(const std::string name, FnBinder &&binder)
-        : name_(name), binder_(std::move(binder)) {
-    }
-
-    std::unique_ptr<AbstractGenerator> operator()(const GeneratorContext &context) {
-        return std::make_unique<G2Generator>(context, name_, binder_);
-    }
-};
-
 }  // namespace Internal
 }  // namespace Halide
 
-#define HALIDE_REGISTER_G2(GEN_FUNC, GEN_REGISTRY_NAME, ...)                                                                        \
-    namespace halide_register_generator {                                                                                           \
-    struct halide_global_ns;                                                                                                        \
-    namespace GEN_REGISTRY_NAME##_ns {                                                                                              \
-        std::unique_ptr<Halide::Internal::AbstractGenerator> factory(const Halide::GeneratorContext &context) {                     \
-            using Input [[maybe_unused]] = Halide::Internal::FnBinder::Input;                                                       \
-            using Output [[maybe_unused]] = Halide::Internal::FnBinder::Output;                                                     \
-            using Constant [[maybe_unused]] = Halide::Internal::FnBinder::Constant;                                                 \
-            using Halide::Bool;                                                                                                     \
-            using Halide::Float;                                                                                                    \
-            using Halide::Int;                                                                                                      \
-            using Halide::UInt;                                                                                                     \
-            using Halide::Handle;                                                                                                   \
-            Halide::Internal::FnBinder d(GEN_FUNC, {__VA_ARGS__});                                                                  \
-            return Halide::Internal::G2GeneratorFactory(#GEN_REGISTRY_NAME, std::move(d))(context);                                 \
-        }                                                                                                                           \
-    }                                                                                                                               \
-    static auto reg_##GEN_REGISTRY_NAME = Halide::Internal::RegisterGenerator(#GEN_REGISTRY_NAME, GEN_REGISTRY_NAME##_ns::factory); \
-    }                                                                                                                               \
-    static_assert(std::is_same<::halide_register_generator::halide_global_ns, halide_register_generator::halide_global_ns>::value,  \
+#define HALIDE_REGISTER_G2(GEN_FUNC, GEN_REGISTRY_NAME, ...)                                        \
+    namespace halide_register_generator {                                                           \
+    struct halide_global_ns;                                                                        \
+    namespace GEN_REGISTRY_NAME##_ns {                                                              \
+        Halide::Internal::AbstractGeneratorPtr factory(const Halide::GeneratorContext &context) {   \
+            using Input [[maybe_unused]] = Halide::Internal::FnBinder::Input;                       \
+            using Output [[maybe_unused]] = Halide::Internal::FnBinder::Output;                     \
+            using Constant [[maybe_unused]] = Halide::Internal::FnBinder::Constant;                 \
+            using Target [[maybe_unused]] = Halide::Internal::FnBinder::Target;                 \
+            using Halide::Bool;                                                                     \
+            using Halide::Float;                                                                    \
+            using Halide::Int;                                                                      \
+            using Halide::UInt;                                                                     \
+            using Halide::Handle;                                                                   \
+            Halide::Internal::FnBinder d(GEN_FUNC, #GEN_REGISTRY_NAME, {__VA_ARGS__});              \
+            return std::make_unique<Halide::Internal::G2Generator>(context, #GEN_REGISTRY_NAME, d); \
+        }                                                                                           \
+    }                                                                                               \
+    static auto reg_##GEN_REGISTRY_NAME =                                                           \
+        Halide::Internal::RegisterGenerator(#GEN_REGISTRY_NAME, GEN_REGISTRY_NAME##_ns::factory);   \
+    }                                                                                               \
+    static_assert(std::is_same<::halide_register_generator::halide_global_ns,                       \
+                               halide_register_generator::halide_global_ns>::value,                 \
                   "HALIDE_REGISTER_G2 must be used at global scope");
 
-#endif HALIDE_G2_H_
-
+#endif  // HALIDE_G2_H_

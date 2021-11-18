@@ -17,6 +17,16 @@ Func g2_func_impl(Func input, Expr offset, int scaling) {
     return output;
 }
 
+Func g2_func_impl_target(Target t, Func input, Expr offset, int scaling) {
+    std::cout << "Hey Look, g_t is invoked with target=" << t << "\n";
+
+    Func output;
+    output(x, y) = input(x, y) * scaling + offset;
+    output.compute_root();
+
+    return output;
+}
+
 const auto g2_lambda_impl = [](Func input, Expr offset, int scaling,
                                Type ignored_type, bool ignored_bool, std::string ignored_string, int8_t ignored_int8) {
     std::cout << "Ignoring type: " << ignored_type << "\n";
@@ -68,6 +78,15 @@ Pipeline g2_pipeline_impl(Func input, Expr offset, int scaling) {
 HALIDE_REGISTER_G2(
     Halide::Testing::g2_func_impl,
     g2,
+    Input("input", Int(32), 2),
+    Input("offset", Int(32)),
+    Constant("scaling", 2),
+    Output("output", Int(32), 2))
+
+HALIDE_REGISTER_G2(
+    Halide::Testing::g2_func_impl_target,
+    g2_t,
+    Target(),
     Input("input", Int(32), 2),
     Input("offset", Int(32)),
     Constant("scaling", 2),
