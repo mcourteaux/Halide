@@ -127,6 +127,9 @@ WITH_EXCEPTIONS ?=
 WITH_LLVM_INSIDE_SHARED_LIBHALIDE ?= not-empty
 
 
+HALIDE_PREFER_G2_GENERATORS ?= 0
+G2_CXX_FLAGS = -DHALIDE_PREFER_G2_GENERATORS=$(HALIDE_PREFER_G2_GENERATORS)
+
 # If HL_TARGET or HL_JIT_TARGET aren't set, use host
 HL_TARGET ?= host
 HL_JIT_TARGET ?= host
@@ -252,7 +255,7 @@ LLVM_SHARED_LIBS = -Wl,-rpath=$(LLVM_LIBDIR) -L $(LLVM_LIBDIR) -lLLVM
 
 LLVM_LIBS_FOR_SHARED_LIBHALIDE=$(if $(WITH_LLVM_INSIDE_SHARED_LIBHALIDE),$(LLVM_STATIC_LIBS),$(LLVM_SHARED_LIBS))
 
-TUTORIAL_CXX_FLAGS ?= -std=c++17 -g -fno-omit-frame-pointer $(RTTI_CXX_FLAGS) -I $(ROOT_DIR)/tools $(SANITIZER_FLAGS) $(LLVM_CXX_FLAGS_LIBCPP)
+TUTORIAL_CXX_FLAGS ?= -std=c++17 -g -fno-omit-frame-pointer $(RTTI_CXX_FLAGS) -I $(ROOT_DIR)/tools $(SANITIZER_FLAGS) $(LLVM_CXX_FLAGS_LIBCPP) $(G2_CXX_FLAGS)
 # The tutorials contain example code with warnings that we don't want
 # to be flagged as errors, so the test flags are the tutorial flags
 # plus our warning flags.
