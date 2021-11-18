@@ -502,8 +502,9 @@ private:
 
 public:
     struct Target : public SingleArg {
+        // "illegal-target-string" will get replaced by the target string before invocation.
         Target()
-            : SingleArg("target", SingleArg::Kind::Constant, {type_of<halide_fake_target_type_t *>()}, 0, "host") {
+            : SingleArg("target", SingleArg::Kind::Constant, {type_of<halide_fake_target_type_t *>()}, 0, "illegal-target-string") {
         }
     };
 
@@ -750,11 +751,14 @@ class G2Generator : public AbstractGenerator {
 
     Pipeline pipeline_;
 
-    static std::map<std::string, std::string> init_generatorparams(const std::vector<FnBinder::Constant> &constants) {
+    static std::map<std::string, std::string> init_generatorparams(const TargetInfo &target_info,
+                                                                   const std::vector<FnBinder::Constant> &constants) {
         std::map<std::string, std::string> result;
         for (const auto &c : constants) {
             result[c.name] = c.default_value;
         }
+        // Always set this last, to override the placeholder value we may have stuffed there
+        result["target"] = target_info.target.to_string();
         return result;
     }
 
@@ -764,7 +768,7 @@ public:
           name_(name),
           inputs_(binder.inputs()),
           outputs_(binder.outputs()),
-          generatorparams_(init_generatorparams(binder.constants())),
+          generatorparams_(init_generatorparams(target_info_, binder.constants())),
           invoker_(binder.invoker()) {
     }
 
