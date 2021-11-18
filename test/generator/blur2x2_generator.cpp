@@ -22,7 +22,8 @@ using namespace Halide;
 
 Var x("x"), y("y"), c("c");
 
-Func Blur2x2(const Target &target, ImageParam input, Expr width, Expr height) {
+// A general utility that deals only with Funcs and has no schedule.
+Func blur2x2(Func input, Expr width, Expr height) {
     Func input_clamped =
         Halide::BoundaryConditions::repeat_edge(input, {{0, width}, {0, height}});
 
@@ -31,6 +32,13 @@ Func Blur2x2(const Target &target, ImageParam input, Expr width, Expr height) {
         (input_clamped(x - 1, y, c) + input_clamped(x + 1, y, c) +
          input_clamped(x, y - 1, c) + input_clamped(x, y + 1, c)) /
         4.0f;
+
+    return blur;
+}
+
+// A wrapper for the general version that deals with Image inputs and outputs and has a real schedule.
+Func blur2x2_scheduled(const Target &target, ImageParam input, Expr width, Expr height) {
+    Func blur = blur2x2(input, width, height);
 
     // Unset default constraints so that specialization works.
     input.dim(0).set_stride(Expr());
@@ -51,7 +59,7 @@ Func Blur2x2(const Target &target, ImageParam input, Expr width, Expr height) {
 }  // namespace
 
 HALIDE_REGISTER_G2(
-    Blur2x2,  // actual C++ fn
+    blur2x2_scheduled,  // actual C++ fn
     blur2x2,            // build-system name
     Target(),
     Input("input", Float(32), 3),
