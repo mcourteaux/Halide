@@ -6,17 +6,19 @@
 
     - How to specify inputs-as-buffers?
         - (Mainly, how to specify buffer-level constraints on an input Func, e.g stride, etc, for e.g. specialize())
+        - static declarations aren't flexible enough, alas
+        - currently requires declaring those inputs as ImageParam, which is adequate but not ideal (requires
+          manual wrappers for some cases)
+          - Could we allow some sort of lambda in the registration to allow setting them?
+            Probably not, might need info about other inputs that would be hard to pipeline in
         - can't specify Halide::Buffer as input because we need a Parameter
         - can't use func.output_buffer() [sic] because the Parameter won't get found by code
           and is wonky and bad
-        - could extend inputs to allow ImageParam, but would reduce generality some (would likely mean
-          writing manual wrappers for general code, which is probably OK)
-            - Could we have a way to express constraints of that sort as part of the registration?
     - How to specify outputs-as-buffers?
         - func.output_buffer() works, but is ugly and yucky
-        - could we surface OutputImageParam as a useful type here? Maybe but would be a weird paradigm shift
+        - could we surface OutputImageParam as a useful type here?
+          Maybe but would be a weird paradigm shift
 */
-
 
 #include "AbstractGenerator.h"
 
@@ -103,7 +105,8 @@ struct SingleArg {
         Expression,
         Tuple,
         Function,
-        Pipeline
+        Pipeline,
+        InputBuffer,
     };
 
     std::string name;
@@ -158,6 +161,7 @@ inline std::ostream &operator<<(std::ostream &stream, SingleArg::Kind k) {
         "Tuple",
         "Function",
         "Pipeline",
+        "InputBuffer",
     };
     stream << kinds[(int)k];
     return stream;
@@ -172,7 +176,7 @@ inline std::ostream &operator<<(std::ostream &stream, IOKind k) {
     static const char *const kinds[] = {
         "Scalar",
         "Function",
-        "Buffer",  // shouldn't ever see them here
+        "Buffer",
     };
     stream << kinds[(int)k];
     return stream;
@@ -271,6 +275,11 @@ inline SingleArg SingleArgInferrer<Halide::Func>::operator()() {
 }
 
 template<>
+inline SingleArg SingleArgInferrer<Halide::ImageParam>::operator()() {
+    return SingleArg{"", SingleArg::Kind::InputBuffer, {}, -1};
+}
+
+template<>
 inline SingleArg SingleArgInferrer<Halide::Pipeline>::operator()() {
     return SingleArg{"", SingleArg::Kind::Pipeline, {}, -1};
 }
@@ -347,6 +356,13 @@ inline Tuple CapturedArg::value<Tuple>(const StrMap &m) const {
 template<>
 inline Func CapturedArg::value<Func>(const StrMap &m) const {
     return func;
+}
+
+template<>
+inline ImageParam CapturedArg::value<ImageParam>(const StrMap &m) const {
+    internal_assert(params.size() == 1 && params[0].defined());
+    internal_assert(func.defined());
+    return Halide::ImageParam(params[0], func);
 }
 
 template<>
@@ -580,6 +596,8 @@ protected:
         case SingleArg::Kind::Function:
         case SingleArg::Kind::Pipeline:
             return IOKind::Function;
+        case SingleArg::Kind::InputBuffer:
+            return IOKind::Buffer;
         }
     }
 
@@ -667,7 +685,7 @@ protected:
             } else {
                 inputs_.push_back(to_arginfo(matched));
 
-                const bool is_buffer = (k == SingleArg::Kind::Function);
+                const bool is_buffer = (k == SingleArg::Kind::Function || k == SingleArg::Kind::InputBuffer);
                 std::vector<Func> funcs;
                 std::vector<Expr> exprs;
                 for (size_t idx = 0; idx < matched.types.size(); idx++) {
@@ -866,7 +884,7 @@ public:
             using Input [[maybe_unused]] = Halide::Internal::FnBinder::Input;                       \
             using Output [[maybe_unused]] = Halide::Internal::FnBinder::Output;                     \
             using Constant [[maybe_unused]] = Halide::Internal::FnBinder::Constant;                 \
-            using Target [[maybe_unused]] = Halide::Internal::FnBinder::Target;                 \
+            using Target [[maybe_unused]] = Halide::Internal::FnBinder::Target;                     \
             using Halide::Bool;                                                                     \
             using Halide::Float;                                                                    \
             using Halide::Int;                                                                      \

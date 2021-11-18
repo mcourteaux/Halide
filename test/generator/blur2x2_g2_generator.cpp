@@ -16,7 +16,7 @@ Halide::Expr is_planar(const T &p, int channels = 3) {
 
 Var x("x"), y("y"), c("c");
 
-Func blur2x2(const Target &target, Func input, Expr width, Expr height) {
+Func blur2x2(Func input, Expr width, Expr height) {
     Func input_clamped =
         Halide::BoundaryConditions::repeat_edge(input, {{0, width}, {0, height}});
 
@@ -26,20 +26,25 @@ Func blur2x2(const Target &target, Func input, Expr width, Expr height) {
          input_clamped(x, y - 1, c) + input_clamped(x, y + 1, c)) /
         4.0f;
 
-#if 0
+    return blur;
+}
+
+Func blur2x2_scheduled(const Target &target, ImageParam input, Expr width, Expr height) {
+    Func blur = blur2x2(input, width, height);
+
+
     // Unset default constraints so that specialization works.
-    input.output_buffer().dim(0).set_stride(Expr());
+    input.dim(0).set_stride(Expr());
     blur.output_buffer().dim(0).set_stride(Expr());
 
     // Add specialization for input and output buffers that are both planar.
-    blur.specialize(is_planar(input.output_buffer()) && is_planar(blur.output_buffer()))
+    blur.specialize(is_planar(input) && is_planar(blur.output_buffer()))
         .vectorize(x, target.natural_vector_size<float>());
 
     // Add specialization for input and output buffers that are both interleaved.
-    blur.specialize(is_interleaved(input.output_buffer()) && is_interleaved(blur.output_buffer()))
+    blur.specialize(is_interleaved(input) && is_interleaved(blur.output_buffer()))
         .reorder(c, x, y)
         .vectorize(c);
-#endif
 
     return blur;
 }
@@ -47,7 +52,7 @@ Func blur2x2(const Target &target, Func input, Expr width, Expr height) {
 }  // namespace
 
 HALIDE_REGISTER_G2(
-    blur2x2,     // actual C++ fn
+    blur2x2_scheduled,     // actual C++ fn
     blur2x2_g2,  // build-system name
     Target(),
     Input("input", Float(32), 3),
