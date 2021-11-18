@@ -6,8 +6,8 @@
 
 #include "g2.h"
 #include "g2_lambda.h"
-#include "g2_tuple.h"
 #include "g2_pipeline.h"
+#include "g2_tuple.h"
 
 using namespace Halide::Runtime;
 
@@ -29,7 +29,6 @@ int main(int argc, char **argv) {
     input.for_each_element([&](int x, int y) {
         input(x, y) = (x + y);
     });
-
 
     {
         Buffer<int32_t> output(kSize, kSize);
@@ -91,7 +90,7 @@ int main(int argc, char **argv) {
 
     {
         Buffer<int32_t> output0(kSize, kSize);
-        Buffer<int32_t> output1(kSize*2, kSize*2);
+        Buffer<int32_t> output1(kSize * 2, kSize * 2);
         g2_pipeline(input, offset, output0, output1);
         const int32_t scaling = 2;  // GeneratorParam, aka "Constant"
         output0.for_each_element([&](int x, int y) {
@@ -103,7 +102,7 @@ int main(int argc, char **argv) {
             }
         });
         output1.for_each_element([&](int x, int y) {
-            int expected = input(x/2, y/2) * scaling + offset;
+            int expected = input(x / 2, y / 2) * scaling + offset;
             int actual = output1(x, y);
             if (expected != actual) {
                 fprintf(stderr, "g2_pipeline[1]: at %d %d, expected %d, actual %d\n", x, y, expected, actual);

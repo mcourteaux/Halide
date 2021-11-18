@@ -19,18 +19,17 @@ Func Alias(Func input, int offset) {
 
 HALIDE_REGISTER_G2(
     Alias,  // actual C++ fn
-    alias,            // build-system name
+    alias,  // build-system name
     Input("input", Int(32), 1),
     Constant("offset", 0),
     Output("output", Int(32), 1))
 
 HALIDE_REGISTER_G2(
-    Alias,  // actual C++ fn
-    alias_with_offset_42,            // build-system name
+    Alias,                 // actual C++ fn
+    alias_with_offset_42,  // build-system name
     Input("input", Int(32), 1),
     Constant("offset", 42),
     Output("output", Int(32), 1))
-
 
 #else
 
