@@ -615,18 +615,18 @@ public:
         initialize(std::forward<Fn>(fn), (typename function_signature<Fn>::type *)nullptr, inputs_and_outputs);
     }
 
-    std::vector<Constant> constants() const {
+    const std::vector<Constant> &constants() const {
         return constants_;
     }
-    std::vector<AbstractGenerator::ArgInfo> inputs() const {
+    const std::vector<AbstractGenerator::ArgInfo> &inputs() const {
         return inputs_;
     }
-    std::vector<AbstractGenerator::ArgInfo> outputs() const {
+    const std::vector<AbstractGenerator::ArgInfo> &outputs() const {
         return outputs_;
     }
 
-    std::shared_ptr<FnInvoker> invoker() const {
-        return invoker_;
+    FnInvoker &invoker() const {
+        return *invoker_.get();
     }
 
 protected:
@@ -634,7 +634,7 @@ protected:
     std::vector<Constant> constants_;
     std::vector<AbstractGenerator::ArgInfo> inputs_;
     std::vector<AbstractGenerator::ArgInfo> outputs_;
-    std::shared_ptr<FnInvoker> invoker_;
+    std::unique_ptr<FnInvoker> invoker_;
 
     static IOKind to_iokind(ArgKind k) {
         switch (k) {
@@ -795,9 +795,8 @@ protected:
 class G2Generator : public AbstractGenerator {
     const TargetInfo target_info_;
     const std::string name_;
-    const std::vector<AbstractGenerator::ArgInfo> inputs_, outputs_;
+    FnBinder binder_;
     std::map<std::string, std::string> generatorparams_;
-    std::shared_ptr<FnInvoker> invoker_;
 
     Pipeline pipeline_;
 
@@ -813,13 +812,11 @@ class G2Generator : public AbstractGenerator {
     }
 
 public:
-    explicit G2Generator(const GeneratorContext &context, const std::string &name, const FnBinder &binder)
+    explicit G2Generator(const GeneratorContext &context, const std::string &name, FnBinder binder)
         : target_info_{context.get_target(), context.get_auto_schedule(), context.get_machine_params()},
           name_(name),
-          inputs_(binder.inputs()),
-          outputs_(binder.outputs()),
-          generatorparams_(init_generatorparams(target_info_, binder.constants())),
-          invoker_(binder.invoker()) {
+          binder_(std::move(binder)),
+          generatorparams_(init_generatorparams(target_info_, binder_.constants())) {
     }
 
     std::string get_name() override {
@@ -831,11 +828,11 @@ public:
     }
 
     std::vector<AbstractGenerator::ArgInfo> get_input_arginfos() override {
-        return inputs_;
+        return binder_.inputs();
     }
 
     std::vector<AbstractGenerator::ArgInfo> get_output_arginfos() override {
-        return outputs_;
+        return binder_.outputs();
     }
 
     std::vector<std::string> get_generatorparam_names() override {
@@ -882,10 +879,10 @@ public:
         internal_assert(!pipeline_.defined())
             << "build_pipeline() may not be called twice.";
 
-        pipeline_ = invoker_->invoke(generatorparams_);
+        pipeline_ = binder_.invoker().invoke(generatorparams_);
 
-        internal_assert(outputs_.size() == pipeline_.outputs().size())
-            << "Expected exactly " << outputs_.size() << " output(s) but the function returned a Pipeline containing "
+        internal_assert(binder_.outputs().size() == pipeline_.outputs().size())
+            << "Expected exactly " << binder_.outputs().size() << " output(s) but the function returned a Pipeline containing "
             << pipeline_.outputs().size() << ".";
 
         internal_assert(pipeline_.defined())
@@ -896,7 +893,7 @@ public:
     std::vector<Parameter> get_parameters_for_input(const std::string &name) override {
         internal_assert(pipeline_.defined())
             << "get_parameters_for_input() must be called after build_pipeline().";
-        return invoker_->get_parameters_for_input(name);
+        return binder_.invoker().get_parameters_for_input(name);
     }
 
     std::vector<Func> get_funcs_for_output(const std::string &name) override {
@@ -904,9 +901,9 @@ public:
             << "get_funcs_for_output() must be called after build_pipeline().";
         auto outputs = pipeline_.outputs();
 
-        internal_assert(outputs_.size() == outputs.size());
-        for (size_t i = 0; i < outputs_.size(); i++) {
-            if (outputs_[i].name == name) {
+        internal_assert(binder_.outputs().size() == outputs.size());
+        for (size_t i = 0; i < binder_.outputs().size(); i++) {
+            if (binder_.outputs()[i].name == name) {
                 return {outputs[i]};
             }
         }
@@ -930,29 +927,29 @@ public:
 }  // namespace Internal
 }  // namespace Halide
 
-#define HALIDE_REGISTER_G2(GEN_FUNC, GEN_REGISTRY_NAME, ...)                                        \
-    namespace halide_register_generator {                                                           \
-    struct halide_global_ns;                                                                        \
-    namespace GEN_REGISTRY_NAME##_ns {                                                              \
-        Halide::Internal::AbstractGeneratorPtr factory(const Halide::GeneratorContext &context) {   \
-            using Input [[maybe_unused]] = Halide::Internal::FnBinder::Input;                       \
-            using Output [[maybe_unused]] = Halide::Internal::FnBinder::Output;                     \
-            using Constant [[maybe_unused]] = Halide::Internal::FnBinder::Constant;                 \
-            using Target [[maybe_unused]] = Halide::Internal::FnBinder::Target;                     \
-            using Halide::Bool;                                                                     \
-            using Halide::Float;                                                                    \
-            using Halide::Int;                                                                      \
-            using Halide::UInt;                                                                     \
-            using Halide::Handle;                                                                   \
-            Halide::Internal::FnBinder d(GEN_FUNC, #GEN_REGISTRY_NAME, {__VA_ARGS__});              \
-            return std::make_unique<Halide::Internal::G2Generator>(context, #GEN_REGISTRY_NAME, d); \
-        }                                                                                           \
-    }                                                                                               \
-    static auto reg_##GEN_REGISTRY_NAME =                                                           \
-        Halide::Internal::RegisterGenerator(#GEN_REGISTRY_NAME, GEN_REGISTRY_NAME##_ns::factory);   \
-    }                                                                                               \
-    static_assert(std::is_same<::halide_register_generator::halide_global_ns,                       \
-                               halide_register_generator::halide_global_ns>::value,                 \
+#define HALIDE_REGISTER_G2(GEN_FUNC, GEN_REGISTRY_NAME, ...)                                                   \
+    namespace halide_register_generator {                                                                      \
+    struct halide_global_ns;                                                                                   \
+    namespace GEN_REGISTRY_NAME##_ns {                                                                         \
+        Halide::Internal::AbstractGeneratorPtr factory(const Halide::GeneratorContext &context) {              \
+            using Input [[maybe_unused]] = Halide::Internal::FnBinder::Input;                                  \
+            using Output [[maybe_unused]] = Halide::Internal::FnBinder::Output;                                \
+            using Constant [[maybe_unused]] = Halide::Internal::FnBinder::Constant;                            \
+            using Target [[maybe_unused]] = Halide::Internal::FnBinder::Target;                                \
+            using Halide::Bool;                                                                                \
+            using Halide::Float;                                                                               \
+            using Halide::Int;                                                                                 \
+            using Halide::UInt;                                                                                \
+            using Halide::Handle;                                                                              \
+            Halide::Internal::FnBinder d(GEN_FUNC, #GEN_REGISTRY_NAME, {__VA_ARGS__});                         \
+            return std::make_unique<Halide::Internal::G2Generator>(context, #GEN_REGISTRY_NAME, std::move(d)); \
+        }                                                                                                      \
+    }                                                                                                          \
+    static auto reg_##GEN_REGISTRY_NAME =                                                                      \
+        Halide::Internal::RegisterGenerator(#GEN_REGISTRY_NAME, GEN_REGISTRY_NAME##_ns::factory);              \
+    }                                                                                                          \
+    static_assert(std::is_same<::halide_register_generator::halide_global_ns,                                  \
+                               halide_register_generator::halide_global_ns>::value,                            \
                   "HALIDE_REGISTER_G2 must be used at global scope");
 
 #endif  // HALIDE_G2_H_
