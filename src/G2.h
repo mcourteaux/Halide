@@ -98,25 +98,25 @@ using is_lambda = std::integral_constant<bool, !std::is_function<T0>::value && !
 
 // ---------------------------------------
 
-struct SingleArg {
-    enum class Kind {
-        Unknown,
-        Constant,
-        Expression,
-        Tuple,
-        Function,
-        Pipeline,
-        InputBuffer,
-    };
+enum class ArgKind {
+    Unknown,
+    Constant,
+    Expression,
+    Tuple,
+    Function,
+    Pipeline,
+    ImageParam,
+};
 
+struct SingleArg {
     std::string name;
-    Kind kind = Kind::Unknown;
+    ArgKind kind = ArgKind::Unknown;
     std::vector<Type> types;
     int dimensions = -1;
     std::string default_value;  // only when kind == Constant
     bool is_output = false;
 
-    explicit SingleArg(const std::string &n, Kind k, const std::vector<Type> &t, int d, const std::string &s = "", bool o = false)
+    explicit SingleArg(const std::string &n, ArgKind k, const std::vector<Type> &t, int d, const std::string &s = "", bool o = false)
         : name(n), kind(k), types(t), dimensions(d), default_value(s), is_output(o) {
     }
 
@@ -153,7 +153,7 @@ private:
 
 // ---------------------------------------
 
-inline std::ostream &operator<<(std::ostream &stream, SingleArg::Kind k) {
+inline std::ostream &operator<<(std::ostream &stream, ArgKind k) {
     static const char *const kinds[] = {
         "Unknown",
         "Constant",
@@ -161,7 +161,7 @@ inline std::ostream &operator<<(std::ostream &stream, SingleArg::Kind k) {
         "Tuple",
         "Function",
         "Pipeline",
-        "InputBuffer",
+        "ImageParam",
     };
     stream << kinds[(int)k];
     return stream;
@@ -227,8 +227,8 @@ inline bool SingleArg::is_specified(const std::string &n) {
 }
 
 template<>
-inline bool SingleArg::is_specified(const SingleArg::Kind &k) {
-    return k != SingleArg::Kind::Unknown;
+inline bool SingleArg::is_specified(const ArgKind &k) {
+    return k != ArgKind::Unknown;
 }
 
 template<>
@@ -251,53 +251,53 @@ struct SingleArgInferrer {
     inline SingleArg operator()() {
         const Type t = type_of<T>();
         if (t.is_scalar() && (t.is_int() || t.is_uint() || t.is_float())) {
-            return SingleArg{"", SingleArg::Kind::Constant, {t}, 0};
+            return SingleArg{"", ArgKind::Constant, {t}, 0};
         }
-        return SingleArg{"", SingleArg::Kind::Unknown, {}, -1};
+        return SingleArg{"", ArgKind::Unknown, {}, -1};
     }
 };
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::Type>::operator()() {
     const Type t = type_of<halide_fake_type_type_t *>();
-    return SingleArg{"", SingleArg::Kind::Constant, {t}, 0};
+    return SingleArg{"", ArgKind::Constant, {t}, 0};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<std::string>::operator()() {
     const Type t = type_of<halide_fake_string_type_t *>();
-    return SingleArg{"", SingleArg::Kind::Constant, {t}, 0};
+    return SingleArg{"", ArgKind::Constant, {t}, 0};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::Func>::operator()() {
-    return SingleArg{"", SingleArg::Kind::Function, {}, -1};
+    return SingleArg{"", ArgKind::Function, {}, -1};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::ImageParam>::operator()() {
-    return SingleArg{"", SingleArg::Kind::InputBuffer, {}, -1};
+    return SingleArg{"", ArgKind::ImageParam, {}, -1};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::Pipeline>::operator()() {
-    return SingleArg{"", SingleArg::Kind::Pipeline, {}, -1};
+    return SingleArg{"", ArgKind::Pipeline, {}, -1};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::Expr>::operator()() {
-    return SingleArg{"", SingleArg::Kind::Expression, {}, 0};
+    return SingleArg{"", ArgKind::Expression, {}, 0};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::Tuple>::operator()() {
-    return SingleArg{"", SingleArg::Kind::Tuple, {}, 0};
+    return SingleArg{"", ArgKind::Tuple, {}, 0};
 }
 
 template<>
 inline SingleArg SingleArgInferrer<Halide::Target>::operator()() {
     const Type t = type_of<halide_fake_target_type_t *>();
-    return SingleArg{"target", SingleArg::Kind::Constant, {t}, 0};
+    return SingleArg{"target", ArgKind::Constant, {t}, 0};
 }
 
 // ---------------------------------------
@@ -321,6 +321,7 @@ struct FnInvoker {
 
 struct CapturedArg {
     std::string name;
+    ArgKind kind = ArgKind::Unknown;
     std::vector<Parameter> params;  // Can have > 1 for Tuple-valued inputs
     Func func;
     Expr expr;
@@ -331,6 +332,42 @@ struct CapturedArg {
 
     template<typename T>
     T value(const StrMap &m) const;
+
+    void propagate_estimates() {
+        if (kind != ArgKind::Function) {
+            return;
+        }
+        internal_assert(params.size() == 1);
+
+        // We may have to copy estimates from input Funcs to their corresponding Parameters.
+        const std::vector<Bound> &estimates = func.function().schedule().estimates();
+        if (estimates.empty()) {
+            return;
+        }
+
+        const int d = func.dimensions();
+        const std::vector<Var> fargs = func.args();
+
+        const auto dim_of = [&fargs](const std::string &name) -> int {
+            for (size_t i = 0; i < fargs.size(); ++i) {
+                if (fargs[i].name() == name) {
+                    return i;
+                }
+            }
+            return -1;
+        };
+
+        internal_assert((int)estimates.size() == d);
+        internal_assert((int)fargs.size() == d);
+
+        Parameter &p = params[0];
+        for (const Bound &b : estimates) {
+            const int dim = dim_of(b.var);
+            internal_assert(dim >= 0);
+            p.set_min_constraint_estimate(dim, b.min);
+            p.set_extent_constraint_estimate(dim, b.extent);
+        }
+    }
 
 private:
     std::string get_string(const StrMap &m) const {
@@ -345,21 +382,25 @@ private:
 
 template<>
 inline Expr CapturedArg::value<Expr>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Expression);
     return expr;
 }
 
 template<>
 inline Tuple CapturedArg::value<Tuple>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Tuple);
     return tuple;
 }
 
 template<>
 inline Func CapturedArg::value<Func>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Function);
     return func;
 }
 
 template<>
 inline ImageParam CapturedArg::value<ImageParam>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::ImageParam);
     internal_assert(params.size() == 1 && params[0].defined());
     internal_assert(func.defined());
     return Halide::ImageParam(params[0], func);
@@ -367,12 +408,14 @@ inline ImageParam CapturedArg::value<ImageParam>(const StrMap &m) const {
 
 template<>
 inline std::string CapturedArg::value<std::string>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Constant);
     const std::string s = get_string(m);
     return s;
 }
 
 template<>
 inline Type CapturedArg::value<Type>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Constant);
     const std::string s = get_string(m);
     const auto &types = get_halide_type_enum_map();
     const auto it = types.find(s);
@@ -382,6 +425,7 @@ inline Type CapturedArg::value<Type>(const StrMap &m) const {
 
 template<>
 inline bool CapturedArg::value<bool>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Constant);
     const std::string s = get_string(m);
     bool b = false;
     if (s == "true") {
@@ -396,6 +440,7 @@ inline bool CapturedArg::value<bool>(const StrMap &m) const {
 
 template<>
 inline Target CapturedArg::value<Target>(const StrMap &m) const {
+    internal_assert(kind == ArgKind::Constant);
     const std::string s = get_string(m);
     return Halide::Target(s);
 }
@@ -427,7 +472,11 @@ struct CapturedFn : public FnInvoker {
     CapturedFn() = default;
 
     Pipeline invoke(const std::map<std::string, std::string> &constants) override {
-        return invoke_impl(constants, std::make_index_sequence<sizeof...(Args)>());
+        Pipeline result = invoke_impl(constants, std::make_index_sequence<sizeof...(Args)>());
+        for (auto &a : args) {
+            a.propagate_estimates();
+        }
+        return result;
     }
 
     std::vector<Parameter> get_parameters_for_input(const std::string &name) override {
@@ -504,7 +553,7 @@ public:
     struct Target : public SingleArg {
         // "illegal-target-string" will get replaced by the target string before invocation.
         Target()
-            : SingleArg("target", SingleArg::Kind::Constant, {type_of<halide_fake_target_type_t *>()}, 0, "illegal-target-string") {
+            : SingleArg("target", ArgKind::Constant, {type_of<halide_fake_target_type_t *>()}, 0, "illegal-target-string") {
         }
     };
 
@@ -516,13 +565,13 @@ public:
 
     private:
         Constant(const std::string &n, const TypeAndString &t_and_s)
-            : SingleArg(n, SingleArg::Kind::Constant, {t_and_s.type}, 0, t_and_s.str) {
+            : SingleArg(n, ArgKind::Constant, {t_and_s.type}, 0, t_and_s.str) {
         }
     };
 
     struct Input : public SingleArg {
         explicit Input(const std::string &n, const std::vector<Type> &t, int d)
-            : SingleArg(n, SingleArg::Kind::Unknown, t, d) {
+            : SingleArg(n, ArgKind::Unknown, t, d) {
         }
         explicit Input(const std::string &n, const std::vector<Type> &t)
             : Input(n, t, -1) {
@@ -537,7 +586,7 @@ public:
 
     struct Output : public SingleArg {
         explicit Output(const std::string &n, const std::vector<Type> &t, int d)
-            : SingleArg(n, SingleArg::Kind::Unknown, t, d, "", true) {
+            : SingleArg(n, ArgKind::Unknown, t, d, "", true) {
         }
 
         explicit Output(const std::string &n, const std::vector<Type> &t)
@@ -587,17 +636,17 @@ protected:
     std::vector<AbstractGenerator::ArgInfo> outputs_;
     std::shared_ptr<FnInvoker> invoker_;
 
-    static IOKind to_iokind(SingleArg::Kind k) {
+    static IOKind to_iokind(ArgKind k) {
         switch (k) {
         default:
-            internal_error << "Unhandled SingleArg::Kind: " << k;
-        case SingleArg::Kind::Expression:
-        case SingleArg::Kind::Tuple:
+            internal_error << "Unhandled ArgKind: " << k;
+        case ArgKind::Expression:
+        case ArgKind::Tuple:
             return IOKind::Scalar;
-        case SingleArg::Kind::Function:
-        case SingleArg::Kind::Pipeline:
+        case ArgKind::Function:
+        case ArgKind::Pipeline:
             return IOKind::Function;
-        case SingleArg::Kind::InputBuffer:
+        case ArgKind::ImageParam:
             return IOKind::Buffer;
         }
     }
@@ -667,18 +716,19 @@ protected:
             user_assert(!inputs_and_outputs[i].is_output) << "Outputs must be listed after all Inputs and Constants, but saw '"
                                                           << inputs_and_outputs[i].name << "' out of place"
                                                           << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
-            const bool is_constant = (inferred_input_arg_types[i].kind == SingleArg::Kind::Constant);
+            const bool is_constant = (inferred_input_arg_types[i].kind == ArgKind::Constant);
             const bool skip_default_value = !is_constant;
             const SingleArg matched = SingleArg::match(inputs_and_outputs[i], inferred_input_arg_types[i], skip_default_value);
 
             CapturedArg &carg = captured->args[i];
             carg.name = matched.name;
             const auto k = inferred_input_arg_types[i].kind;
-            user_assert(k != SingleArg::Kind::Pipeline)
+            user_assert(k != ArgKind::Pipeline)
                 << "Pipeline is only allowed for Outputs, not Inputs"
                 << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
-            ;
-            if (k == SingleArg::Kind::Constant) {
+            internal_assert(carg.kind == ArgKind::Unknown);
+            carg.kind = k;
+            if (k == ArgKind::Constant) {
                 constants_.emplace_back(matched.name, matched.default_value);
                 constants_.back().types = matched.types;
 
@@ -686,7 +736,7 @@ protected:
             } else {
                 inputs_.push_back(to_arginfo(matched));
 
-                const bool is_buffer = (k == SingleArg::Kind::Function || k == SingleArg::Kind::InputBuffer);
+                const bool is_buffer = (k == ArgKind::Function || k == ArgKind::ImageParam);
                 std::vector<Func> funcs;
                 std::vector<Expr> exprs;
                 for (size_t idx = 0; idx < matched.types.size(); idx++) {
@@ -714,10 +764,10 @@ protected:
                 }
 
                 if (exprs.size() > 1) {
-                    internal_assert(k == SingleArg::Kind::Tuple);
+                    internal_assert(k == ArgKind::Tuple);
                     carg.tuple = Tuple(exprs);
                 } else if (exprs.size() == 1) {
-                    if (k == SingleArg::Kind::Tuple) {
+                    if (k == ArgKind::Tuple) {
                         // Tuple of size 1
                         carg.tuple = Tuple(exprs);
                     } else {
@@ -731,7 +781,7 @@ protected:
 
         SingleArg inferred_ret_type = SingleArgInferrer<typename std::decay<ReturnType>::type>()();
         inferred_ret_type.is_output = true;
-        user_assert(inferred_ret_type.kind == SingleArg::Kind::Function || inferred_ret_type.kind == SingleArg::Kind::Pipeline)
+        user_assert(inferred_ret_type.kind == ArgKind::Function || inferred_ret_type.kind == ArgKind::Pipeline)
             << "Outputs must be Func or Pipeline, but the type seen was " << inferred_ret_type.types
             << " for HALIDE_REGISTER_G2(" << registry_name_ << ").";
         for (size_t i = first_output; i < inputs_and_outputs.size(); ++i) {
