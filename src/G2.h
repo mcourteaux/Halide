@@ -337,9 +337,8 @@ struct CapturedArg {
         if (kind != ArgKind::Function) {
             return;
         }
-        internal_assert(params.size() == 1);
 
-        // We may have to copy estimates from input Funcs to their corresponding Parameters.
+        // We may have to copy estimates from input Func to its corresponding Parameter(s).
         const std::vector<Bound> &estimates = func.function().schedule().estimates();
         if (estimates.empty()) {
             return;
@@ -360,12 +359,14 @@ struct CapturedArg {
         internal_assert((int)estimates.size() == d);
         internal_assert((int)fargs.size() == d);
 
-        Parameter &p = params[0];
         for (const Bound &b : estimates) {
             const int dim = dim_of(b.var);
             internal_assert(dim >= 0);
-            p.set_min_constraint_estimate(dim, b.min);
-            p.set_extent_constraint_estimate(dim, b.extent);
+            // Could be multiple Params if the Func has Tuple values.
+            for (Parameter &p : params) {
+                p.set_min_constraint_estimate(dim, b.min);
+                p.set_extent_constraint_estimate(dim, b.extent);
+            }
         }
     }
 
