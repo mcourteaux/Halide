@@ -368,9 +368,9 @@ void Stage::set_dim_type(const VarOrRVar &var, ForType t) {
                             // its identity for each value in the definition if it is a Tuple
                             const auto &prover_result = prove_associativity(func_name, args, values);
 
-                            user_assert(prover_result.associative())
+                            user_assert(prover_result.associative() && prover_result.commutative())
                                 << "Failed to call atomic() on " << name()
-                                << " since it can't prove associativity of the operator.\n";
+                                << " since it can't prove associativity or commutativity of the operator.\n";
                             internal_assert(prover_result.size() == values.size());
                         }
                     }
@@ -3179,7 +3179,7 @@ Module Func::compile_to_module(const vector<Argument> &args, const std::string &
     return pipeline().compile_to_module(args, fn_name, target);
 }
 
-void Func::compile_to(const map<Output, string> &output_files,
+void Func::compile_to(const map<OutputFileType, string> &output_files,
                       const vector<Argument> &args,
                       const string &fn_name,
                       const Target &target) {
