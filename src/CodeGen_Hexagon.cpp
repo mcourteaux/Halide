@@ -1464,7 +1464,7 @@ int generate_delta_path(int x1, int x2) {
 // switches need conflicting settings.
 bool generate_vdelta(const std::vector<int> &indices, bool reverse,
                      std::vector<int> &switches) {
-    debug(3) << "CodeGen_Hexagon::generate_vdelta(" << indices << ", " << reverse << ", " << switches << ")";
+    debug(3) << "CodeGen_Hexagon::generate_vdelta(" << indices << ", " << reverse << ", " << switches << ")\n";
     int width = (int)indices.size();
     internal_assert(is_power_of_two(width));
     switches.resize(width);
@@ -1516,7 +1516,7 @@ bool generate_vdelta(const std::vector<int> &indices, bool reverse,
 
 // Try generating vdelta/vrdelta before falling back to vlut.
 Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
-    debug(3) << "CodeGen_Hexagon::vdelta(" << (void*) lut << ", " << indices << ")";
+    debug(3) << "CodeGen_Hexagon::vdelta(" << (void*) lut << ", " << indices << ")\n";
     llvm::Type *lut_ty = lut->getType();
     int lut_elements = get_vector_num_elements(lut_ty);
     llvm::Type *element_ty = get_vector_element_type(lut_ty);
@@ -1549,6 +1549,7 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
                 }
             }
         }
+        debug(3) << "  replicate: " << replicate << "; i8_indices: " << i8_indices << "\n";
         Value *result = vdelta(i8_lut, i8_indices);
         llvm::Type *result_ty = get_vector_type(get_vector_element_type(lut_ty), indices.size());
         return builder->CreateBitCast(result, result_ty);
@@ -1557,6 +1558,7 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
     // We can only use vdelta to produce a single native vector at a
     // time. Break the input into native vector length shuffles.
     if (result_elements != native_elements) {
+        debug(3) << "  legalize into chunks:\n";
         vector<llvm::Value *> ret;
         for (int i = 0; i < result_elements; i += native_elements) {
             vector<int> indices_i(native_elements);
@@ -1567,6 +1569,8 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
                     indices_i[j] = -1;
                 }
             }
+
+            debug(3) << "  chunk: " << indices_i << "\n";
             Value *ret_i = vdelta(lut, indices_i);
             if (result_elements - i < native_elements) {
                 // This was a fractional vector at the end, slice the part we want.
@@ -1583,6 +1587,7 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
     // input. If we have more than one, we need to break it into
     // multiple vdelta operations, and combine them with select.
     if (lut_elements != native_elements) {
+        debug(3) << "  got more lut elements (" << lut_elements << ") than native (" << native_elements << ")\n";
         Value *ret = nullptr;
         for (int i = 0; i < lut_elements; i += native_elements) {
             Value *lut_i = slice_vector(lut, i, native_elements);
