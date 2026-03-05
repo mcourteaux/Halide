@@ -18,8 +18,21 @@
 #include "Target.h"
 #include "Util.h"
 
+
 namespace Halide {
 namespace Internal {
+
+template <typename T>
+std::ostream& operator<< (std::ostream& out, const std::vector<T>& v) {
+    out << "vector{";
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (i != 0) out << ", ";
+        out << v[i];
+    }
+    out << "}";
+    return out;
+}
+
 
 using std::string;
 using std::vector;
@@ -1021,9 +1034,9 @@ Value *CodeGen_Hexagon::interleave_vectors(const vector<llvm::Value *> &v) {
     llvm::Type *v_ty = v[0]->getType();
     llvm::Type *element_ty = get_vector_element_type(v_ty);
     int element_bits = element_ty->getScalarSizeInBits();
-    int native_elements =
-        native_vector_bits() / element_ty->getScalarSizeInBits();
+    int native_elements = native_vector_bits() / element_ty->getScalarSizeInBits();
     int result_elements = get_vector_num_elements(v_ty) * v.size();
+    debug(3) << "CodeGen_Hexagon::interleave_vectors(" << v.size() << " vecs of " << native_elements << " elems)\n";
     if (v.size() == 2) {
         // Interleaving two vectors.
         Value *a = v[0];
@@ -1145,6 +1158,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
     internal_assert(a_ty == b_ty);
 
     int a_elements = get_vector_num_elements(a_ty);
+    debug(3) << "CodeGen_Hexagon::shuffle_vectors(" << (void*) a << "<" << a_elements << " elements>, " << ", " << (void*) b << ", indices=" << indices << ")\n";
 
     llvm::Type *element_ty = get_vector_element_type(a->getType());
     internal_assert(element_ty);
@@ -1165,6 +1179,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
         }
     }
     if (min >= a_elements) {
+        debug(4) << "All elements in b\n";
         vector<int> shifted_indices(indices);
         for (int &i : shifted_indices) {
             if (i != -1) {
@@ -1183,7 +1198,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
         if (a_call && a_call->getCalledFunction() == vcombine) {
             // Rewrite shuffle(vcombine(a, b), x) to shuffle(a, b)
             return shuffle_vectors(
-                create_bitcast(a_call->getArgOperand(1), native_ty),
+                create_bitcast(a_call->getArgOperand(1), native_ty), // TODO is this swap justified???
                 create_bitcast(a_call->getArgOperand(0), native_ty), indices);
         } else if (ShuffleVectorInst *a_shuffle = dyn_cast<ShuffleVectorInst>(a)) {
             std::vector<int> new_indices(indices.size());
@@ -1441,6 +1456,7 @@ int generate_delta_path(int x1, int x2) {
 // switches need conflicting settings.
 bool generate_vdelta(const std::vector<int> &indices, bool reverse,
                      std::vector<int> &switches) {
+    debug(3) << "CodeGen_Hexagon::generate_vdelta(" << indices << ", " << reverse << ", " << switches << ")";
     int width = (int)indices.size();
     internal_assert(is_power_of_two(width));
     switches.resize(width);
@@ -1492,6 +1508,7 @@ bool generate_vdelta(const std::vector<int> &indices, bool reverse,
 
 // Try generating vdelta/vrdelta before falling back to vlut.
 Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
+    debug(3) << "CodeGen_Hexagon::vdelta(" << (void*) lut << ", " << indices << ")";
     llvm::Type *lut_ty = lut->getType();
     int lut_elements = get_vector_num_elements(lut_ty);
     llvm::Type *element_ty = get_vector_element_type(lut_ty);
@@ -1623,6 +1640,7 @@ Value *CodeGen_Hexagon::create_vector(llvm::Type *ty, int val) {
 }
 
 Value *CodeGen_Hexagon::vlut(Value *lut, Value *idx, int min_index, int max_index) {
+    debug(3) << "CodeGen_Hexagon::vlut(" << (void*) lut << ", " << idx << ", min_idx=" << min_index << ", max_idx=" << max_index << ")";
     const unsigned idx_elem_size = idx->getType()->getScalarSizeInBits();
     internal_assert(idx_elem_size <= 16)
         << "Index element for lookup tables must be <= 16 bits in size.\n";
