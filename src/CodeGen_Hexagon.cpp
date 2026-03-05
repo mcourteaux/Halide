@@ -1227,7 +1227,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
         }
         return vdelta(concat_vectors({a, b}), indices);
     }
-    debug(3) << "  Shuffle with strided ramp: " << start << ", " stride << "\n";
+    debug(3) << "  Shuffle with strided ramp: " << start << ", " << stride << "\n";
 
     if (stride == 1) {
         if (result_ty == native2_ty && a_ty == native_ty && b_ty == native_ty) {
