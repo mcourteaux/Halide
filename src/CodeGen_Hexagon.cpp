@@ -1192,18 +1192,18 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
     // Try to rewrite shuffles that only access the elements of a.
     int max = *std::max_element(indices.begin(), indices.end());
     if (max < a_elements) {
-        debug(3) << "All elements in a\n";
+        debug(3) << "  All elements in a\n";
         BitCastInst *a_cast = dyn_cast<BitCastInst>(a);
         CallInst *a_call = dyn_cast<CallInst>(a_cast ? a_cast->getOperand(0) : a);
         llvm::Function *vcombine = llvm::Intrinsic::getOrInsertDeclaration(module.get(), INTRINSIC_128B(vcombine));
         if (a_call && a_call->getCalledFunction() == vcombine) {
-            debug(3) << "Shuffle of vcombine\n";
+            debug(3) << "  Shuffle of vcombine\n";
             // Rewrite shuffle(vcombine(a, b), x) to shuffle(a, b)
             return shuffle_vectors(
                 create_bitcast(a_call->getArgOperand(1), native_ty), // TODO is this swap justified???
                 create_bitcast(a_call->getArgOperand(0), native_ty), indices);
         } else if (ShuffleVectorInst *a_shuffle = dyn_cast<ShuffleVectorInst>(a)) {
-            debug(3) << "Shuffle of shuffle. Nested indices: " << a_shuffle.getShuffleMask().vec() << "\n";
+            debug(3) << "  Shuffle of shuffle. Nested indices: " << a_shuffle->getShuffleMask().vec() << "\n";
             std::vector<int> new_indices(indices.size());
             for (size_t i = 0; i < indices.size(); i++) {
                 if (indices[i] != -1) {
@@ -1212,7 +1212,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
                     new_indices[i] = -1;
                 }
             }
-            debug(3) << "Rewrote indices: " << new_indices << "\n";
+            debug(3) << "  Rewrote indices: " << new_indices << "\n";
             return shuffle_vectors(a_shuffle->getOperand(0),
                                    a_shuffle->getOperand(1), new_indices);
         }
@@ -1227,6 +1227,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
         }
         return vdelta(concat_vectors({a, b}), indices);
     }
+    debug(3) << "  Shuffle with strided ramp: " << start << ", " stride << "\n";
 
     if (stride == 1) {
         if (result_ty == native2_ty && a_ty == native_ty && b_ty == native_ty) {
@@ -1312,6 +1313,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
         return concat_vectors(ret);
     }
 
+    debug(3) << "  Fallback to general vdelta(concat(a, b), indices)";
     // Use a general delta operation.
     return vdelta(concat_vectors({a, b}), indices);
 }
