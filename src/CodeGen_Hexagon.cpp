@@ -1597,7 +1597,7 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
             bool all_used = true;
             bool none_used = true;
             for (int j = 0; j < native_elements; j++) {
-                int idx = indices[j] - i;
+                int idx = indices[i + j] - i;
                 if (0 <= idx && idx < native_elements) {
                     indices_i[j] = idx;
                     mask[j] = ConstantInt::get(i1_t, 1);
