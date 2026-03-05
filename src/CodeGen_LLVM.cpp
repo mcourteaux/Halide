@@ -2212,7 +2212,7 @@ Value *CodeGen_LLVM::interleave_vectors(const std::vector<Value *> &vecs) {
     }
     int vec_elements = get_vector_num_elements(vecs[0]->getType());
 
-    debug(3) << "CodeGen_LLVM::interleave_vectors(" << vecs.size() << " vecs of " << vec_elements << " elems)\n";
+    debug(2) << "CodeGen_LLVM::interleave_vectors(" << vecs.size() << " vecs of " << vec_elements << " elems)\n";
 
     if (vecs.size() == 1) {
         return vecs[0];
@@ -5044,7 +5044,7 @@ Value *CodeGen_LLVM::shuffle_vectors(Value *a, Value *b,
     // Check for type identity *after* normalizing to fixed vectors
     internal_assert(a->getType() == b->getType());
     int elements_a = get_vector_num_elements(a->getType());
-    debug(3) << "CodeGen_LLVM::shuffle_vectors(" << (void*) a << "<" << elements_a << " elements>, " << ", " << (void*) b << ", indices=" << indices << ")\n";
+    debug(2) << "CodeGen_LLVM::shuffle_vectors(" << (void*) a << "<" << elements_a << " elements>, " << ", " << (void*) b << ", indices=" << indices << ")\n";
     vector<Constant *> llvm_indices(indices.size());
     for (size_t i = 0; i < llvm_indices.size(); i++) {
         if (indices[i] >= 0) {
@@ -5061,7 +5061,7 @@ Value *CodeGen_LLVM::shuffle_vectors(Value *a, Value *b,
 
 Value *CodeGen_LLVM::shuffle_vectors(Value *a, const std::vector<int> &indices) {
     Value *b = PoisonValue::get(a->getType());
-    debug(3) << "CodeGen_LLVM::shuffle_vectors(" << (void*) a << ", poison, indices=" << indices << ")\n";
+    debug(2) << "CodeGen_LLVM::shuffle_vectors(" << (void*) a << ", poison, indices=" << indices << ")\n";
     return shuffle_vectors(a, b, indices);
 }
 

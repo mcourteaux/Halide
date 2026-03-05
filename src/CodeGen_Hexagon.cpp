@@ -1222,12 +1222,14 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
     int start = 0, stride = 0;
     if (!is_strided_ramp(indices, start, stride)) {
         if (is_concat_or_slice(indices)) {
+            debug(3) << "  Concat/slice to LLVM: " <<  indices << "\n";
             // Let LLVM handle concat or slices.
             return CodeGen_Posix::shuffle_vectors(a, b, indices);
         }
+        debug(3) << "  Fallback to general vdelta(concat(a, b), indices): " <<  indices << "\n";
         return vdelta(concat_vectors({a, b}), indices);
     }
-    debug(3) << "  Shuffle with strided ramp: " << start << ", " << stride << "\n";
+    debug(3) << "  Shuffle with strided ramp: " << start << ", " << stride << ": " << indices << "\n";
 
     if (stride == 1) {
         if (result_ty == native2_ty && a_ty == native_ty && b_ty == native_ty) {
@@ -1313,7 +1315,7 @@ Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
         return concat_vectors(ret);
     }
 
-    debug(3) << "  Fallback to general vdelta(concat(a, b), indices)";
+    debug(3) << "  Fallback to general vdelta(concat(a, b), indices): " <<  indices << "\n";
     // Use a general delta operation.
     return vdelta(concat_vectors({a, b}), indices);
 }
