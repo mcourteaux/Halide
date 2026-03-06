@@ -759,7 +759,7 @@ Expr extract_odd_lanes(const Expr &e) {
 }
 
 Expr extract_lane(const Expr &e, int lane) {
-    return extract_lanes(e, lane, e.type().lanes(), 1);
+    return extract_lanes(e, lane, 1, 1);
 }
 
 namespace {
