@@ -39,6 +39,8 @@ using std::vector;
 
 using namespace llvm;
 
+#define SIMPLE_HEXAGON 1
+
 #ifdef WITH_HEXAGON
 
 namespace {
@@ -103,6 +105,7 @@ protected:
                              std::vector<llvm::Value *>, bool maybe = false);
     ///@}
 
+#if !SIMPLE_HEXAGON
     /** Override CodeGen_LLVM to use hexagon intrinics when possible. */
     ///@{
     llvm::Value *interleave_vectors(const std::vector<llvm::Value *> &v) override;
@@ -118,6 +121,7 @@ protected:
     ///@}
 
     llvm::Value *vdelta(llvm::Value *lut, const std::vector<int> &indices);
+#endif
 
     /** Because HVX intrinsics operate on vectors of i32, using them
      * requires a lot of extraneous bitcasts, which make it difficult
@@ -132,8 +136,10 @@ private:
      * positive number an int32_t can hold. */
     llvm::Value *codegen_cache_allocation_size(const std::string &name, Type type, const std::vector<Expr> &extents, int padding);
 
+#if !SIMPLE_HEXAGON
     /** Generate a LUT (8/16 bit, max_index < 256) lookup using vlut instructions. */
     llvm::Value *vlut256(llvm::Value *lut, llvm::Value *indices, int min_index = 0, int max_index = 255);
+#endif
 
     /** Wrapper to create a vector populated with a constant value in each lane. */
     Value *create_vector(llvm::Type *ty, int val);
@@ -508,11 +514,13 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
     }
 
     debug(1) << "Hexagon: Optimizing shuffles...\n";
+#if !SIMPLE_HEXAGON
     // vlut always indexes 64 bytes of the LUT at a time, even in 128 byte mode.
     const int lut_alignment = 64;
     body = optimize_hexagon_shuffles(body, lut_alignment);
     debug(2) << "Hexagon: Lowering after optimizing shuffles:\n"
              << body << "\n\n";
+#endif
 
     debug(1) << "Hexagon: Aligning loads for HVX....\n";
     body = align_loads(body, target.natural_vector_size(Int(8)), 8);
@@ -529,11 +537,13 @@ void CodeGen_Hexagon::compile_func(const LoweredFunc &f,
     debug(2) << "Hexagon: Lowering after forwarding stores:\n"
              << body << "\n\n";
 
+#if !SIMPLE_HEXAGON
     // Optimize the IR for Hexagon.
     debug(1) << "Hexagon: Optimizing Hexagon instructions...\n";
     body = optimize_hexagon_instructions(body, target);
     debug(2) << "Hexagon: Lowering after optimizing Hexagon instructions:\n"
              << body << "\n\n";
+#endif
 
     debug(1) << "Hexagon: Adding calls to qurt_hvx_lock, if necessary...\n";
     body = inject_hvx_lock_unlock(body, target);
@@ -1030,6 +1040,7 @@ Value *CodeGen_Hexagon::call_intrin_cast(llvm::Type *ret_ty, int id,
     return call_intrin_cast(ret_ty, intrin, std::move(Ops));
 }
 
+#if !SIMPLE_HEXAGON
 Value *CodeGen_Hexagon::interleave_vectors(const vector<llvm::Value *> &v) {
     llvm::Type *v_ty = v[0]->getType();
     llvm::Type *element_ty = get_vector_element_type(v_ty);
@@ -1088,6 +1099,7 @@ Value *CodeGen_Hexagon::interleave_vectors(const vector<llvm::Value *> &v) {
     }
     return CodeGen_Posix::interleave_vectors(v);
 }
+#endif
 
 // Check if indices form a strided ramp, allowing undef elements to
 // pretend to be part of the ramp.
@@ -1151,6 +1163,7 @@ bool is_concat_or_slice(const vector<int> &indices) {
     return true;
 }
 
+#if !SIMPLE_HEXAGON
 Value *CodeGen_Hexagon::shuffle_vectors(Value *a, Value *b,
                                         const vector<int> &indices) {
     llvm::Type *a_ty = a->getType();
@@ -1645,6 +1658,7 @@ Value *CodeGen_Hexagon::vdelta(Value *lut, const vector<int> &indices) {
     // better to use vlut.
     return vlut(lut, indices);
 }
+#endif
 
 Value *CodeGen_Hexagon::create_vector(llvm::Type *ty, int val) {
     llvm::Type *scalar_ty = ty->getScalarType();
@@ -1652,6 +1666,7 @@ Value *CodeGen_Hexagon::create_vector(llvm::Type *ty, int val) {
     return get_splat(get_vector_num_elements(ty), value);
 }
 
+#if !SIMPLE_HEXAGON
 Value *CodeGen_Hexagon::vlut(Value *lut, Value *idx, int min_index, int max_index) {
     debug(3) << "CodeGen_Hexagon::vlut(" << (void*) lut << ", " << idx << ", min_idx=" << min_index << ", max_idx=" << max_index << ")";
     const unsigned idx_elem_size = idx->getType()->getScalarSizeInBits();
@@ -1775,6 +1790,7 @@ Value *CodeGen_Hexagon::vlut(Value *lut, const vector<int> &indices) {
 
     return vlut(lut, ConstantVector::get(llvm_indices), min_index, max_index);
 }
+#endif
 
 Value *CodeGen_Hexagon::call_intrin(Type result_type, const string &name,
                                     vector<Expr> args, bool maybe) {
@@ -1956,6 +1972,9 @@ void CodeGen_Hexagon::visit(const Call *op) {
                                 {op->args[0], b});
             return;
         } else if (op->is_intrinsic(Call::dynamic_shuffle)) {
+#if SIMPLE_HEXAGON
+            internal_error << "dynamic shuffle not enabled in SIMPLE_HEXAGON config";
+#else
             internal_assert(op->args.size() == 4);
             auto min_index = as_const_int(op->args[2]);
             auto max_index = as_const_int(op->args[3]);
@@ -1964,6 +1983,7 @@ void CodeGen_Hexagon::visit(const Call *op) {
             Value *idx = codegen(op->args[1]);
             value = vlut(lut, idx, *min_index, *max_index);
             return;
+#endif
         } else if (op->is_intrinsic(Call::abs)) {
             internal_assert(op->args.size() == 1);
             Type ty = op->args[0].type();
