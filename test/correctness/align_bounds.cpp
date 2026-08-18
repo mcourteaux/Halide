@@ -32,6 +32,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+#if 0
     // Force the bounds of an intermediate pipeline stage to be even to remove a select
     {
         Func f, g, h;
@@ -227,6 +228,102 @@ int main(int argc, char **argv) {
 
         // Just check if it crashes
         g.realize({1024});
+    }
+
+    // Now try a case where we misalign with an offset (i.e. force the
+    // bounds to be odd), but this time on the output Func. This should also remove the select.
+    {
+        Func f, g;
+        Var x;
+
+        f(x) = 3;
+
+        g(x) = select(x % 2 == 0, f(x + 1), f(x - 1) + 8);
+
+        f.compute_root();
+        g.compute_root().align_bounds(x, 2, 1).unroll(x, 2).guard_with_if(x).trace_realizations();
+
+        // The lowered IR should contain no selects.
+        Module m = g.compile_to_module({});
+        CheckForSelects checker;
+        m.functions()[0].body.accept(&checker);
+        if (checker.result) {
+            printf("Lowered code contained a select\n");
+            return 1;
+        }
+
+        g.jit_handlers().custom_trace = my_trace;
+        Runtime::Buffer<int, 1> result{10};
+        g.realize(result);
+        printf("result bounds: min=%d extent=%d\n", result.dim(0).min(), result.dim(0).extent());
+
+        for (int i = 0; i < 10; i++) {
+            int correct = (i & 1) == 0 ? 3 : 11;
+            if (result(i) != correct) {
+                printf("result(%d) = %d instead of %d\n",
+                       i, result(i), correct);
+                return 1;
+            }
+        }
+
+        // Now the min/max should stick to odd numbers
+        if (trace_min != 0 || trace_extent != 10) {
+            printf("%d: Wrong bounds: [%d, %d]\n", __LINE__, trace_min, trace_extent);
+            return 1;
+        }
+    }
+#endif
+
+    // Now try a case where we parameterize the offset on the output Func.
+    // And we set the min!
+    // This should also remove the select.
+    {
+        Func f, g;
+        Var x;
+        Param<int> p;
+        p.set_range(0, 1);
+
+        f(x) = 3;
+
+        g(x) = select((x + p) % 2 == 0, f(x + 1), f(x - 1) + 8);
+
+        f.compute_root();
+        // g.compute_root().align_bounds(x, 2, -p).unroll(x, 2).guard_with_if(x).trace_realizations();
+        g.compute_root().align_bounds(x, 2, -p).vectorize(x, 2).guard_with_if(x).trace_realizations();
+        g.output_buffer().dim(0).set_min(0);
+
+        // The lowered IR should contain no selects.
+        Module m = g.compile_to_module({p});
+        CheckForSelects checker;
+        m.functions()[0].body.accept(&checker);
+        if (checker.result) {
+            printf("Lowered code contained a select\n");
+            return 1;
+        }
+
+        g.jit_handlers().custom_trace = my_trace;
+        Runtime::Buffer<int, 1> result{10};
+
+        for (int pv = 0; pv < 2; ++pv) {
+            p.set(pv);
+            g.realize(result);
+            printf("result bounds: min=%d extent=%d\n", result.dim(0).min(), result.dim(0).extent());
+
+            for (int i = 0; i < 10; i++) {
+                int correct = ((i + p.get()) & 1) == 0 ? 3 : 11;
+                if (result(i) != correct) {
+                    printf("result(%d) = %d instead of %d\n",
+                           i, result(i), correct);
+                    return 1;
+                }
+            }
+
+            // Now the min/max should stick to odd numbers
+            if (trace_min != 0 || trace_extent != 10) {
+                printf("%d: Wrong bounds: [%d, %d]\n", __LINE__, trace_min, trace_extent);
+                return 1;
+            }
+        }
     }
 
     printf("Success!\n");

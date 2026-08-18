@@ -523,6 +523,42 @@ public:
                 }
             }
 
+            // A map from variables to their bounds, before and after potential modulo-extension.
+            struct ComputedBounds {
+                Expr min, max;
+
+                // The original loop bounds before modulo extension changed the bounds.
+                // Required for guard_by_if.
+                Expr min_original, max_original;
+            };
+            std::map<std::string, ComputedBounds> computed_bounds;
+            const bool clamp_to_outer_bounds =
+                !in_pipeline.empty() && has_extern_consumer.count(name);
+
+            for (size_t d = 0; d < b.size(); d++) {
+                string arg = name + ".s" + std::to_string(stage) + "." + func_args[d];
+
+                ComputedBounds &cb = computed_bounds[arg];
+                cb.max = b[d].max;
+                if (b[d].is_single_point()) {
+                    cb.min = cb.max;
+                } else {
+                    cb.min = b[d].min;
+                }
+
+                if (clamp_to_outer_bounds) {
+                    // Allocation bounds inference is going to have a
+                    // bad time lifting the results of the bounds
+                    // queries outwards. Help it out by insisting that
+                    // the bounds are clamped to lie within the bounds
+                    // one loop level up.
+                    Expr outer_min = Variable::make(Int(32), arg + ".outer_min");
+                    Expr outer_max = Variable::make(Int(32), arg + ".outer_max");
+                    cb.min = clamp(cb.min, outer_min, outer_max);
+                    cb.max = clamp(cb.max, outer_min, outer_max);
+                }
+            }
+
             if (in_pipeline.count(name) == 0) {
                 // Inject any explicit bounds
                 string prefix = name + ".s" + std::to_string(stage) + ".";
@@ -531,11 +567,10 @@ public:
                 LoopLevel store_at = func.schedule().store_level();
 
                 for (auto bound : func.schedule().bounds()) {
-                    string min_var = prefix + bound.var + ".min";
-                    string max_var = prefix + bound.var + ".max";
-                    Expr min_required = Variable::make(Int(32), min_var);
-                    Expr max_required = Variable::make(Int(32), max_var);
-
+                    std::string varname = prefix + bound.var;
+                    string min_var = varname + ".min";
+                    string max_var = varname + ".max";
+                    ComputedBounds &cb = computed_bounds[varname];
                     if (bound.extent.defined()) {
                         // If the Func is compute_at some inner loop, and
                         // only extent is bounded, then the min could
@@ -548,34 +583,38 @@ public:
                             (compute_at.match(loop_level) &&
                              store_at.match(loop_level))) {
                             if (!bound.min.defined()) {
-                                bound.min = min_required;
+                                bound.min = cb.min;
                             }
-                            s = LetStmt::make(min_var, bound.min, s);
-                            s = LetStmt::make(max_var, bound.min + bound.extent - 1, s);
+                            cb.min = bound.min;
+                            cb.max = bound.min + bound.extent - 1;
                         }
 
                         // Save the unbounded values to use in bounds-checking assertions
-                        s = LetStmt::make(min_var + "_unbounded", min_required, s);
-                        s = LetStmt::make(max_var + "_unbounded", max_required, s);
+                        s = LetStmt::make(min_var + "_unbounded", cb.min, s);
+                        s = LetStmt::make(max_var + "_unbounded", cb.max, s);
                     }
+
+                    // Keep track of the original bounds
+                    cb.min_original = cb.min;
+                    cb.max_original = cb.max;
 
                     if (bound.modulus.defined()) {
                         if (bound.remainder.defined()) {
-                            min_required -= bound.remainder;
-                            min_required = (min_required / bound.modulus) * bound.modulus;
-                            min_required += bound.remainder;
-                            Expr max_plus_one = max_required + 1;
-                            max_plus_one -= bound.remainder;
-                            max_plus_one = ((max_plus_one + bound.modulus - 1) / bound.modulus) * bound.modulus;
-                            max_plus_one += bound.remainder;
-                            max_required = max_plus_one - 1;
+                            cb.min -= bound.remainder;
+                            cb.min = (cb.min / bound.modulus) * bound.modulus;
+                            cb.min += bound.remainder;
+
+                            cb.max -= bound.remainder;
+                            cb.max = ((cb.max / bound.modulus) + 1) * bound.modulus - 1;
+                            cb.max += bound.remainder;
+
+                            cb.min = simplify(cb.min);
+                            cb.max = simplify(cb.max);
                         } else {
-                            Expr extent = (max_required - min_required) + 1;
-                            extent = simplify(((extent + bound.modulus - 1) / bound.modulus) * bound.modulus);
-                            max_required = simplify(min_required + extent - 1);
+                            Expr extent = (cb.max - cb.min) + 1;
+                            extent = (((extent + bound.modulus - 1) / bound.modulus) * bound.modulus);
+                            cb.max = simplify(cb.min + extent - 1);
                         }
-                        s = LetStmt::make(min_var, min_required, s);
-                        s = LetStmt::make(max_var, max_required, s);
                     }
                 }
             }
@@ -583,31 +622,23 @@ public:
             for (size_t d = 0; d < b.size(); d++) {
                 string arg = name + ".s" + std::to_string(stage) + "." + func_args[d];
 
-                const bool clamp_to_outer_bounds =
-                    !in_pipeline.empty() && has_extern_consumer.count(name);
-                if (clamp_to_outer_bounds) {
-                    // Allocation bounds inference is going to have a
-                    // bad time lifting the results of the bounds
-                    // queries outwards. Help it out by insisting that
-                    // the bounds are clamped to lie within the bounds
-                    // one loop level up.
-                    Expr outer_min = Variable::make(Int(32), arg + ".outer_min");
-                    Expr outer_max = Variable::make(Int(32), arg + ".outer_max");
-                    b[d].min = clamp(b[d].min, outer_min, outer_max);
-                    b[d].max = clamp(b[d].max, outer_min, outer_max);
-                }
-
-                if (b[d].is_single_point()) {
-                    s = LetStmt::make(arg + ".min", Variable::make(Int(32), arg + ".max"), s);
-                } else {
-                    s = LetStmt::make(arg + ".min", b[d].min, s);
-                }
-                s = LetStmt::make(arg + ".max", b[d].max, s);
+                ComputedBounds &cb = computed_bounds[arg];
 
                 if (clamp_to_outer_bounds) {
                     s = LetStmt::make(arg + ".outer_min", Variable::make(Int(32), arg + ".min"), s);
                     s = LetStmt::make(arg + ".outer_max", Variable::make(Int(32), arg + ".max"), s);
                 }
+
+                // Now finally, emit the LetStmts
+                if (cb.min_original.defined()) {
+                    s = LetStmt::make(arg + ".max_original", cb.max_original, s);
+                    s = LetStmt::make(arg + ".min_original", cb.min_original, s);
+                } else {
+                    s = LetStmt::make(arg + ".max_original", Variable::make(Int(32), arg + ".max"), s);
+                    s = LetStmt::make(arg + ".min_original", Variable::make(Int(32), arg + ".min"), s);
+                }
+                s = LetStmt::make(arg + ".max", simplify(cb.max), s);
+                s = LetStmt::make(arg + ".min", simplify(cb.min), s);
             }
 
             if (stage > 0) {

@@ -224,7 +224,7 @@ Stmt build_loop_nest(
     // Find all the predicated inner variables. We can't split these.
     set<string> predicated_vars;
     for (const Split &split : splits) {
-        if (split.tail == TailStrategy::PredicateLoads || split.tail == TailStrategy::PredicateStores) {
+        if (split.guard_type == Split::PredicateLoads || split.guard_type == Split::PredicateStores) {
             predicated_vars.insert(split.inner);
         }
     }
@@ -2361,7 +2361,7 @@ bool validate_schedule(Function f, const Stmt &s, const Target &target, bool is_
             // ShiftInwards used inside a parallel split can produce racy (though benignly so) code
             // that TSAN will complain about; issue a warning so that the user doesn't assume
             // the warning is legitimate.
-            if (split.tail == TailStrategy::ShiftInwards && parallel_vars.count(split.outer)) {
+            if (split.tail_type == Split::ShiftInwards && parallel_vars.count(split.outer)) {
                 racy_shift_inwards_count++;
             }
         }

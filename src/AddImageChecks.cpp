@@ -399,6 +399,9 @@ Stmt add_image_checks_inner(Stmt s,
             Expr min_required_var = Variable::make(Int(32), min_required_name);
             Expr extent_required_var = Variable::make(Int(32), extent_required_name);
 
+            min_required = simplify(min_required);
+            extent_required = simplify(extent_required);
+
             lets_required.emplace_back(extent_required_name, extent_required);
             lets_required.emplace_back(min_required_name, min_required);
 

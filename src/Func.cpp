@@ -473,9 +473,8 @@ void check_for_race_conditions_in_split_with_blend(const StageSchedule &sched) {
             if (parallel.count(split.old_var)) {
                 parallel.insert(split.inner);
                 parallel.insert(split.old_var);
-                if (split.tail == TailStrategy::ShiftInwardsAndBlend ||
-                    split.tail == TailStrategy::RoundUpAndBlend) {
-                    user_error << "Tail strategy " << split.tail
+                if (split.guard_type == Split::GuardType::Blend) {
+                    user_error << "Tail strategies with Blend"
                                << " may not be used to split " << split.old_var
                                << " because other vars stemming from the same original "
                                << "Var or RVar are marked as parallel."
@@ -1120,6 +1119,7 @@ void Stage::split(const string &old, const string &outer, const string &inner, c
 
     definition.schedule().touched() = true;
 
+    internal_assert(!outer.empty());
     user_assert(inner != outer) << "In schedule for " << name()
                                 << ", can't split " << old << " into "
                                 << outer << " and " << inner
@@ -1271,7 +1271,7 @@ void Stage::split(const string &old, const string &outer, const string &inner, c
                 auto it = descends_from_shiftinwards_outer.find(s.old_var);
                 switch (s.split_type) {
                 case Split::SplitVar:
-                    if (s.tail == TailStrategy::ShiftInwards) {
+                    if (s.tail_type == Split::TailType::ShiftInwards) {
                         descends_from_shiftinwards_outer[s.outer] = s.factor;
                     } else if (it != descends_from_shiftinwards_outer.end()) {
                         descends_from_shiftinwards_outer[s.inner] = it->second;
@@ -1317,9 +1317,71 @@ void Stage::split(const string &old, const string &outer, const string &inner, c
             << "Anything else may change the meaning of the algorithm\n";
     }
 
+    Split::TailType tail_type;
+    Split::GuardType guard_type;
+    switch (tail) {
+    case TailStrategy::GuardWithIf:
+    case TailStrategy::Predicate:
+        tail_type = Split::RoundUp;
+        guard_type = Split::GuardWithIf;
+        break;
+    case TailStrategy::RoundUp:
+        tail_type = Split::RoundUp;
+        guard_type = Split::NoGuard;
+        break;
+    case TailStrategy::PredicateStores:
+        tail_type = Split::RoundUp;
+        guard_type = Split::PredicateStores;
+        break;
+    case TailStrategy::PredicateLoads:
+        tail_type = Split::RoundUp;
+        guard_type = Split::PredicateLoads;
+        break;
+    case TailStrategy::ShiftInwards:
+        tail_type = Split::ShiftInwards;
+        guard_type = Split::NoGuard;
+        break;
+    case TailStrategy::ShiftInwardsAndBlend:
+        tail_type = Split::ShiftInwards;
+        guard_type = Split::Blend;
+        break;
+    case TailStrategy::RoundUpAndBlend:
+        tail_type = Split::RoundUp;
+        guard_type = Split::Blend;
+        break;
+    case TailStrategy::Auto:
+        internal_error << "Auto should have been resolved";
+        break;
+    }
+
     // Add the split to the splits list
-    Split split = {old_name, outer_name, inner_name, factor, exact, tail, Split::SplitVar};
+    Split split = {old_name, outer_name, inner_name, factor, exact, tail_type, guard_type, Split::SplitVar};
     definition.schedule().splits().push_back(split);
+}
+
+void Stage::guard(const std::string &var, Internal::Split::GuardType guard) {
+    // If possible, rewrite the split that defines it.
+    bool found = false;
+    for (auto &split : reverse_view(definition.schedule().splits())) {
+        switch (split.split_type) {
+        case Split::FuseVars:
+        case Split::RenameVar:
+            // We can't add guards to fuses and renames
+            break;
+        case Split::SplitVar:
+            if (split.old_var == var) {
+                split.guard_type = guard;
+                found = true;
+                break;
+            }
+            break;
+        }
+    }
+
+    if (!found) {
+        Split split = {var, "", "", 1, false, Split::RoundUp, guard, Split::SplitVar};
+        definition.schedule().splits().push_back(split);
+    }
 }
 
 Stage &Stage::split(const VarOrRVar &old, const VarOrRVar &outer, const VarOrRVar &inner, const Expr &factor, TailStrategy tail) {
@@ -1335,8 +1397,21 @@ Stage &Stage::split(const VarOrRVar &old, const VarOrRVar &outer, const VarOrRVa
     return *this;
 }
 
-Stage &Stage::guard_with_if(const std::vector<Var> &vars, Partition partition) {
+Stage &Stage::guard_with_if(const VarOrRVar &var) {
     definition.schedule().touched() = true;
+    guard(var.name(), Split::GuardType::GuardWithIf);
+    return *this;
+}
+
+Stage &Stage::predicate_stores(const VarOrRVar &var) {
+    definition.schedule().touched() = true;
+    guard(var.name(), Split::GuardType::PredicateStores);
+    return *this;
+}
+
+Stage &Stage::predicate_loads(const VarOrRVar &var) {
+    definition.schedule().touched() = true;
+    guard(var.name(), Split::GuardType::PredicateLoads);
     return *this;
 }
 
@@ -1418,7 +1493,7 @@ Stage &Stage::fuse(const VarOrRVar &inner, const VarOrRVar &outer, const VarOrRV
     set_dim_type(fused, dims[inner_pos].for_type);
 
     // Add the fuse to the splits list
-    Split split = {fused_name, outer_name, inner_name, Expr(), true, TailStrategy::RoundUp, Split::FuseVars};
+    Split split = {fused_name, outer_name, inner_name, Expr(), true, Split::RoundUp, Split::NoGuard, Split::FuseVars};
     definition.schedule().splits().push_back(split);
     return *this;
 }
@@ -1669,7 +1744,7 @@ Stage &Stage::rename(const VarOrRVar &old_var, const VarOrRVar &new_var) {
     }
 
     if (!found) {
-        Split split = {old_name, new_name, "", 1, old_var.is_rvar, TailStrategy::RoundUp, Split::RenameVar};
+        Split split = {old_name, new_name, "", 1, old_var.is_rvar, Split::RoundUp, Split::NoGuard, Split::RenameVar};
         definition.schedule().splits().push_back(split);
     }
 
@@ -2542,6 +2617,22 @@ Func Func::copy_to_host() {
     user_assert(!is_extern())
         << "copy_to_host on Func " << name() << " with extern definition\n";
     return copy_to_device(DeviceAPI::Host);
+}
+
+Func &Func::guard_with_if(const VarOrRVar &var) {
+    invalidate_cache();
+    Stage(func, func.definition(), 0).guard_with_if(var);
+    return *this;
+}
+Func &Func::predicate_stores(const VarOrRVar &var) {
+    invalidate_cache();
+    Stage(func, func.definition(), 0).predicate_stores(var);
+    return *this;
+}
+Func &Func::predicate_loads(const VarOrRVar &var) {
+    invalidate_cache();
+    Stage(func, func.definition(), 0).predicate_loads(var);
+    return *this;
 }
 
 Func &Func::split(const VarOrRVar &old, const VarOrRVar &outer, const VarOrRVar &inner, const Expr &factor, TailStrategy tail) {

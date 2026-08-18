@@ -201,6 +201,8 @@ Expr Simplify::visit(const Add *op, ExprInfo *info) {
            rewrite(x + ((c0 - x) / c1) * c1, c0 - ((c0 - x) % c1), c1 > 0) ||
            rewrite(x + ((c0 - x) / c1 + y) * c1, y * c1 - ((c0 - x) % c1) + c0, c1 > 0) ||
            rewrite(x + (y + (c0 - x) / c1) * c1, y * c1 - ((c0 - x) % c1) + c0, c1 > 0) ||
+           rewrite(((y - x) / c1) * c1 + x, y - ((y - x) % c1), c1 > 0) ||
+           rewrite((((y - x) + z) / c1) * c1 + x, y + z - (((y - x) + z) % c1), c1 > 0) ||
 
            false)))) {
         return mutate(rewrite.result, info);

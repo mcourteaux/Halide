@@ -337,7 +337,16 @@ struct Split {
     bool exact;  // Is it required that the factor divides the extent
                  // of the old var. True for splits of RVars. Forces
                  // tail strategy to be GuardWithIf.
-    TailStrategy tail;
+
+    enum GuardType { NoGuard = 0,
+                     PredicateLoads,
+                     PredicateStores,
+                     GuardWithIf,  // essentially both PredicateLoads and PredicateStores
+                     Blend,        // Like predicate stores, but for update stages, where simply PredicateStores would be illegal.
+    };
+
+    enum TailType { RoundUp = 0,
+                    ShiftInwards };
 
     enum SplitType { SplitVar = 0,
                      RenameVar,
@@ -351,6 +360,8 @@ struct Split {
 
     // If split_type is Fuse, then this does the opposite of a
     // split, it joins the outer and inner into the old_var.
+    TailType tail_type;
+    GuardType guard_type;
     SplitType split_type;
 };
 

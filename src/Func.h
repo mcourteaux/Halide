@@ -81,6 +81,7 @@ class Stage {
     void set_dim_device_api(const VarOrRVar &var, DeviceAPI device_api);
     void split(const std::string &old, const std::string &outer, const std::string &inner,
                const Expr &factor, bool exact, TailStrategy tail);
+    void guard(const std::string &var, Internal::Split::GuardType guard);
     void remove(const std::string &var);
 
     const std::vector<Internal::StorageDim> &storage_dims() const {
@@ -364,7 +365,9 @@ public:
      * traversed. See the documentation for Func for the meanings. */
     // @{
 
-    Stage &guard_with_if(const std::vector<Var> &vars, Partition partition = Partition::Auto);
+    Stage &guard_with_if(const VarOrRVar &var);
+    Stage &predicate_stores(const VarOrRVar &var);
+    Stage &predicate_loads(const VarOrRVar &var);
     Stage &split(const VarOrRVar &old, const VarOrRVar &outer, const VarOrRVar &inner, const Expr &factor, TailStrategy tail = TailStrategy::Auto);
     Stage &fuse(const VarOrRVar &inner, const VarOrRVar &outer, const VarOrRVar &fused);
     Stage &serial(const VarOrRVar &var);
@@ -1510,6 +1513,10 @@ public:
      * memcpy.
      */
     Func copy_to_host();
+
+    Func &guard_with_if(const VarOrRVar &var);
+    Func &predicate_stores(const VarOrRVar &var);
+    Func &predicate_loads(const VarOrRVar &var);
 
     /** Split a dimension into inner and outer subdimensions with the
      * given names, where the inner dimension iterates from 0 to
