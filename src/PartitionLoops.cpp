@@ -23,6 +23,84 @@ using std::vector;
 
 namespace {
 
+class ContainsVariable : public IRVisitor {
+    using IRVisitor::visit;
+
+    const Scope<> &var_names;
+
+    void visit(const Variable *op) override {
+        if (var_names.contains(op->name)) {
+            found = true;
+        }
+    }
+
+public:
+    ContainsVariable(const Scope<void> &var_names) : var_names(var_names) {
+    }
+
+    bool found = false;
+};
+
+bool contains_any_variable(const Expr &expr, const Scope<> &vars) {
+    ContainsVariable cv(vars);
+    cv(expr);
+    return cv.found;
+}
+
+class MarkClampedIndicesOverVectorizedVarsAsLikely : public IRMutator {
+    using IRMutator::visit;
+    Scope<void> vectorized_vars;
+
+    Stmt visit(const For *op) override {
+        auto token = vectorized_vars.push(op->name);
+        Stmt r = IRMutator::visit(op);
+        vectorized_vars.pop(token);
+        return r;
+    }
+
+    Expr visit(const Min *op) override {
+        if (in_index && contains_any_variable(op->a, vectorized_vars)) {
+            // No point recursing into the ramp - it can't contain
+            // another ramp.
+            return min(likely(op->a), mutate(op->b));
+        } else if (in_index && contains_any_variable(op->b, vectorized_vars)) {
+            return min(mutate(op->a), likely(op->b));
+        } else {
+            return IRMutator::visit(op);
+        }
+    }
+
+    Expr visit(const Max *op) override {
+        if (in_index && contains_any_variable(op->a, vectorized_vars)) {
+            return max(likely(op->a), mutate(op->b));
+        } else if (in_index && contains_any_variable(op->b, vectorized_vars)) {
+            return max(mutate(op->a), likely(op->b));
+        } else {
+            return IRMutator::visit(op);
+        }
+    }
+
+    Expr visit(const Load *op) override {
+        bool old_in_index = in_index;
+        in_index = true;
+        Expr expr = IRMutator::visit(op);
+        in_index = old_in_index;
+        return expr;
+    }
+
+    Stmt visit(const Store *op) override {
+        bool old_in_index = in_index;
+        in_index = true;
+        Expr index = mutate(op->index);
+        in_index = old_in_index;
+        Expr value = mutate(op->value);
+        Expr predicate = mutate(op->predicate);
+        return op->with(value, index, predicate, op->alignment);
+    }
+
+    bool in_index = false;
+};
+
 // Loop partitioning only applies to things marked as 'likely'. Loads
 // through hand-written boundary conditions will produce clamped
 // ramps, which will turn into gathers. This pass injects likely
@@ -1133,11 +1211,17 @@ class LowerLikelyIfInnermost : public IRMutator {
     }
 
     Stmt visit(const For *op) override {
-        ContainsHotLoop c;
-        op->body.accept(&c);
-        inside_innermost_loop = !c.result;
+        bool old_inside_innermost_loop = inside_innermost_loop;
+        if (op->partition_policy == Partition::Always) {
+            // Let's pretend we're actually already in the innermost loop.
+            inside_innermost_loop = true;
+        } else {
+            ContainsHotLoop c;
+            op->body.accept(&c);
+            inside_innermost_loop = !c.result;
+        }
         Stmt stmt = IRMutator::visit(op);
-        inside_innermost_loop = false;
+        inside_innermost_loop = old_inside_innermost_loop;
         return stmt;
     }
 };
@@ -1162,7 +1246,8 @@ Stmt partition_loops(Stmt s) {
     // Walk inwards to the first loop before doing any more work.
     s = mutate_with(s, [](auto *self, const For *op) {
         Stmt s = op;
-        s = MarkClampedRampsAsLikely()(s);
+        // s = MarkClampedRampsAsLikely()(s);
+        s = MarkClampedIndicesOverVectorizedVarsAsLikely()(s);
         s = ExpandSelects()(s);
         s = PartitionLoops()(s);
         s = RenormalizeGPULoops()(s);

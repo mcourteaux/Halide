@@ -364,6 +364,7 @@ public:
      * traversed. See the documentation for Func for the meanings. */
     // @{
 
+    Stage &guard_with_if(const std::vector<Var> &vars, Partition partition = Partition::Auto);
     Stage &split(const VarOrRVar &old, const VarOrRVar &outer, const VarOrRVar &inner, const Expr &factor, TailStrategy tail = TailStrategy::Auto);
     Stage &fuse(const VarOrRVar &inner, const VarOrRVar &outer, const VarOrRVar &fused);
     Stage &serial(const VarOrRVar &var);

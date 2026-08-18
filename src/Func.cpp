@@ -1335,6 +1335,11 @@ Stage &Stage::split(const VarOrRVar &old, const VarOrRVar &outer, const VarOrRVa
     return *this;
 }
 
+Stage &Stage::guard_with_if(const std::vector<Var> &vars, Partition partition) {
+    definition.schedule().touched() = true;
+    return *this;
+}
+
 Stage &Stage::fuse(const VarOrRVar &inner, const VarOrRVar &outer, const VarOrRVar &fused) {
     definition.schedule().touched() = true;
     if (!fused.is_rvar) {

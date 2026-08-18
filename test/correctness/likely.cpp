@@ -60,6 +60,7 @@ public:
 class CheckStoreCount : public IRMutator {
     string func;
     int correct;
+    int line;
 
 public:
     using IRMutator::mutate;
@@ -68,6 +69,7 @@ public:
         Counter c(func);
         s.accept(&c);
         if (c.store_count != correct) {
+            printf("%s:%d ", __FILE__, line);
             printf("There were %d stores to %s instead of %d\n", c.store_count, func.c_str(), correct);
             debug(1) << s << "\n";
             exit(1);
@@ -75,13 +77,13 @@ public:
         return s;
     }
 
-    CheckStoreCount(string f, int c)
-        : func(f), correct(c) {
+    CheckStoreCount(string f, int c, int line)
+        : func(f), correct(c), line(line) {
     }
 };
 
-void count_partitions(Func g, int correct) {
-    g.add_custom_lowering_pass(new CheckStoreCount(g.name(), correct));
+void count_partitions(Func g, int correct, int line = __builtin_LINE()) {
+    g.add_custom_lowering_pass(new CheckStoreCount(g.name(), correct, line));
     g.compile_to_module(g.infer_arguments());
 }
 
